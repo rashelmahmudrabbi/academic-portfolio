@@ -628,7 +628,7 @@ function layout({ title, authed, body, flash }) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(title)} Â· Portfolio Admin</title>
+<title>${esc(title)} · Portfolio Admin</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>${STYLE}</style>
 <script>
@@ -1108,7 +1108,7 @@ function renderTable({ resourceKey, label, fields, rows, extraCol }) {
 
 function truncate(v, n) {
   const s = v === null || v === undefined ? '' : String(v);
-  return s.length > n ? s.slice(0, n) + 'â€¦' : s;
+  return s.length > n ? s.slice(0, n) + '...' : s;
 }
 
 function renderCvAdmin(currentUrl) {

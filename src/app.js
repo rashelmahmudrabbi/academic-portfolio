@@ -36,7 +36,7 @@ async function ensureTables(sql) {
 }
 
 // Resources that get a generic, auto-generated admin CRUD screen. Gallery
-// events also live here (title/year only) â€” their nested photos get their
+// events also live here (title/year only) — their nested photos get their
 // own dedicated admin routes further down. Settings is a singleton and
 // handled entirely separately.
 const ADMIN_RESOURCE_KEYS = [
@@ -122,7 +122,7 @@ function buildApp() {
   });
 
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Public, read-only API â€” same paths and JSON shapes the frontend
+  // Public, read-only API — same paths and JSON shapes the frontend
   // already calls (see portfolio-frontend/assets/js/api.js).
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -503,7 +503,7 @@ function buildApp() {
   }
 
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Admin panel â€” session-cookie protected, server-rendered HTML forms.
+  // Admin panel — session-cookie protected, server-rendered HTML forms.
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   app.get('/admin/login', (req, res) => {
@@ -740,7 +740,7 @@ function buildApp() {
         title: 'Dashboard', authed: true,
         body: `<div style="margin-top:32px; margin-bottom:16px;">
             <h1 style="font-size:36px; font-weight:800; letter-spacing:-0.04em;">Dashboard</h1>
-            <p class="muted" style="font-size:16px;">Edits here appear on the live site immediately â€” no redeploy needed.</p>
+            <p class="muted" style="font-size:16px;">Edits here appear on the live site immediately — no redeploy needed.</p>
           </div>
           ${groupsHtml}
           <div style="height:64px;"></div>`,
@@ -929,8 +929,8 @@ function buildApp() {
         </tr>`)
         .join('');
       res.send(layout({
-        title: `Photos â€” ${event.title}`, authed: true,
-        body: `<h1>Photos â€” ${esc(event.title)}</h1>
+        title: `Photos — ${event.title}`, authed: true,
+        body: `<h1>Photos — ${esc(event.title)}</h1>
           <p><a class="link" href="/admin/gallery">&larr; Back to Gallery</a></p>
           <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
@@ -953,7 +953,7 @@ function buildApp() {
       if (!event) return res.status(404).send('Not found');
       res.send(layout({
         title: 'New Photo', authed: true,
-        body: `<h1>New Photo â€” ${esc(event.title)}</h1><div class="card">${renderForm({
+        body: `<h1>New Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
           fields: PHOTO_FIELDS, action: `/admin/gallery/${event.id}/photos/new`, submitLabel: 'Create',
         })}</div>`,
       }));
@@ -985,7 +985,7 @@ function buildApp() {
       if (!event || !photo) return res.status(404).send('Not found');
       res.send(layout({
         title: 'Edit Photo', authed: true,
-        body: `<h1>Edit Photo â€” ${esc(event.title)}</h1><div class="card">${renderForm({
+        body: `<h1>Edit Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
           fields: PHOTO_FIELDS, row: photo, action: `/admin/gallery/${event.id}/photos/${photo.id}/edit`, submitLabel: 'Save',
         })}</div>`,
       }));
