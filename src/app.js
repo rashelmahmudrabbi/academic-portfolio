@@ -1,0 +1,1421 @@
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
+
+const { getSql } = require('./db');
+const { RESOURCES, serializeRow, splitCommas, splitLines } = require('./resources');
+const auth = require('./auth');
+const { layout, renderForm, renderTable, esc, renderCvAdmin, renderAboutAdmin } = require('./views');
+
+let tablesEnsured = false;
+async function ensureTables(sql) {
+  if (tablesEnsured) return;
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const schemaPath = path.join(__dirname, 'schema.sql');
+    if (fs.existsSync(schemaPath)) {
+      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+      const statements = schemaSql
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const stmt of statements) {
+        try {
+          await sql(stmt);
+        } catch (e) {
+          // ignore existing table or constraint errors
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Schema auto-migration notice:', e.message);
+  }
+  tablesEnsured = true;
+}
+
+// Resources that get a generic, auto-generated admin CRUD screen. Gallery
+// events also live here (title/year only) — their nested photos get their
+// own dedicated admin routes further down. Settings is a singleton and
+// handled entirely separately.
+const ADMIN_RESOURCE_KEYS = [
+  'education', 'experience', 'publications', 'projects', 'certifications',
+  'awards', 'activities', 'courses', 'blog', 'references',
+  'research-interests', 'spoken-languages', 'teaching-roles', 'teaching-areas', 'spotlights', 'about-pills',
+];
+
+// Resources exposed on the public read-only API at /api/<key>. Gallery and
+// settings are handled by their own custom routes below since they need
+// nested data, not a flat table dump.
+const PUBLIC_API_KEYS = [
+  'education', 'experience', 'publications', 'projects', 'certifications',
+  'awards', 'activities', 'courses', 'blog', 'references', 'spotlights', 'about-pills',
+];
+
+function buildApp() {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: false }));
+
+  // ── Security headers ─────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+  });
+
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .concat([
+      'https://rashelmahmudrabbi.github.io',
+      'http://localhost:5500', 'http://127.0.0.1:5500',
+      'http://localhost:3000', 'http://127.0.0.1:3000',
+      'http://localhost:5173', 'http://127.0.0.1:5173',
+      'http://localhost:8000', 'http://127.0.0.1:8000',
+      'http://localhost:8080', 'http://127.0.0.1:8080',
+    ]);
+
+  app.use('/api', cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      callback(null, false);
+    },
+  }));
+
+  // ── Simple in-memory rate limiter for /api/* ──────────────────────────
+  const rateLimitMap = new Map();
+  const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+  const RATE_LIMIT_MAX = 120; // max requests per window per IP
+  app.use('/api', (req, res, next) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let entry = rateLimitMap.get(ip);
+    if (!entry || now - entry.start > RATE_LIMIT_WINDOW_MS) {
+      entry = { start: now, count: 0 };
+      rateLimitMap.set(ip, entry);
+    }
+    entry.count++;
+    if (entry.count > RATE_LIMIT_MAX) {
+      return res.status(429).json({ detail: 'Too many requests. Please try again later.' });
+    }
+    next();
+  });
+  // Clean up stale entries every 5 minutes
+  setInterval(() => {
+    const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+    for (const [ip, entry] of rateLimitMap) {
+      if (entry.start < cutoff) rateLimitMap.delete(ip);
+    }
+  }, 5 * 60 * 1000).unref();
+
+  // ── Cache-Control for all GET /api/* responses ───────────────────────
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET') {
+      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=86400');
+    }
+    next();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Public, read-only API — same paths and JSON shapes the frontend
+  // already calls (see portfolio-frontend/assets/js/api.js).
+  // ─────────────────────────────────────────────────────────────────────
+
+  app.get('/', (req, res) => {
+    res.json({
+      status: 'ok',
+      message: 'Portfolio API is running',
+      endpoints: { admin: '/admin', health: '/api/health', api: '/api/' },
+    });
+  });
+
+  app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+  // New endpoint to serve Base64 images directly to avoid bloating the main JSON payload
+  app.get('/api/image/:table/:id/:column', async (req, res, next) => {
+    try {
+      const allowedTables = ['site_settings', 'certifications', 'awards', 'spotlights', 'gallery_photos'];
+      const table = req.params.table;
+      const column = req.params.column;
+      const id = parseInt(req.params.id, 10);
+      
+      if (!allowedTables.includes(table)) return res.status(403).send('Forbidden');
+      if (!['avatar', 'image', 'src'].includes(column)) return res.status(403).send('Forbidden');
+      
+      const sql = getSql();
+      // Safely interpolate table/column since they are strictly whitelisted above
+      const rows = await sql(`SELECT ${column} FROM ${table} WHERE id = $1`, [id]);
+      if (!rows || rows.length === 0) return res.status(404).send('Not found');
+      
+      const b64Str = rows[0][column];
+      if (!b64Str || !b64Str.startsWith('data:image/')) {
+        return res.status(404).send('Not a base64 image');
+      }
+      
+      const matches = b64Str.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (!matches) return res.status(404).send('Invalid image format');
+      
+      const mimeType = matches[1];
+      const buffer = Buffer.from(matches[2], 'base64');
+      
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache aggressively for 1 year
+      res.send(buffer);
+    } catch (err) { next(err); }
+  });
+
+  app.get('/api/cv/download', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      // Auto-create table if it doesn't exist
+      await sql(`CREATE TABLE IF NOT EXISTS cv_files (
+        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        file_data TEXT,
+        mimetype TEXT,
+        filename TEXT
+      )`);
+      const [cvFile] = await sql(`SELECT file_data, mimetype, filename FROM cv_files WHERE id = 1`);
+
+      if (cvFile && cvFile.file_data) {
+        const buffer = Buffer.from(cvFile.file_data, 'base64');
+        res.setHeader('Content-Type', cvFile.mimetype || 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${cvFile.filename || 'cv.pdf'}"`);
+        res.send(buffer);
+      } else {
+        // Fallback to legacy Google Drive link or return 404
+        const [settings] = await sql(`SELECT cv_download_url FROM site_settings WHERE id = 1`);
+        if (settings && settings.cv_download_url) {
+          let fallbackUrl = settings.cv_download_url;
+          const gDriveMatch = fallbackUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+          if (gDriveMatch) {
+            fallbackUrl = `https://drive.google.com/uc?export=download&id=${gDriveMatch[1]}`;
+          }
+          res.redirect(fallbackUrl);
+        } else {
+          res.status(404).send('CV not found');
+        }
+      }
+    } catch (err) { next(err); }
+  });
+
+  app.post('/api/contact', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+
+      const name = (req.body.name || '').trim();
+      const email = (req.body.email || '').trim();
+      const subject = (req.body.subject || '').trim();
+      const message = (req.body.message || '').trim();
+
+      if (!name || !email || !message) {
+        return res.status(400).json({ error: 'Name, email, and message are required.' });
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: 'Please provide a valid email address.' });
+      }
+
+      await sql`
+        INSERT INTO contact_messages (name, email, subject, message)
+        VALUES (${name}, ${email}, ${subject}, ${message})
+      `;
+
+      res.status(201).json({ success: true, message: 'Your message has been received! Thank you for reaching out.' });
+    } catch (err) { next(err); }
+  });
+
+  // ── Combined /api/portfolio endpoint ──────────────────────────────────
+  // Returns ALL homepage data in a single response, cutting round-trips
+  // from 10+ to 1 and making the page load significantly faster.
+  app.get('/api/portfolio', async (req, res, next) => {
+    try {
+      const sql = getSql();
+
+      // Fetch everything in a single roundtrip using JSON aggregation.
+      // This eliminates the overhead of 18 concurrent HTTP requests to the database.
+      const [allData] = await sql`
+        SELECT
+          (SELECT json_agg( (to_jsonb(t) - 'avatar') || jsonb_build_object('avatar', CASE WHEN avatar LIKE 'data:image%' THEN '/api/image/site_settings/' || id || '/avatar' ELSE avatar END) ) FROM (SELECT * FROM site_settings WHERE id = 1) t) AS "settingsRow",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM research_interests ORDER BY sort_order ASC, id ASC) t) AS "interests",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM spoken_languages ORDER BY sort_order ASC, id ASC) t) AS "langs",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_roles ORDER BY sort_order ASC, id ASC) t) AS "roles",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_areas ORDER BY sort_order ASC, id ASC) t) AS "areas",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM education ORDER BY sort_order ASC, id ASC) t) AS "eduRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM experience ORDER BY sort_order ASC, id ASC) t) AS "expRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM publications ORDER BY sort_order ASC, id ASC) t) AS "pubRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM projects ORDER BY sort_order ASC, id ASC) t) AS "projRows",
+          (SELECT COALESCE(json_agg( (to_jsonb(t) - 'image') || jsonb_build_object('image', CASE WHEN image LIKE 'data:image%' THEN '/api/image/certifications/' || id || '/image' ELSE image END) ), '[]'::json) FROM (SELECT * FROM certifications ORDER BY sort_order ASC, id ASC) t) AS "certRows",
+          (SELECT COALESCE(json_agg( (to_jsonb(t) - 'image') || jsonb_build_object('image', CASE WHEN image LIKE 'data:image%' THEN '/api/image/awards/' || id || '/image' ELSE image END) ), '[]'::json) FROM (SELECT * FROM awards ORDER BY sort_order ASC, id ASC) t) AS "awardRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM activities ORDER BY sort_order ASC, id ASC) t) AS "actRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM gallery_events ORDER BY sort_order ASC, id ASC) t) AS "galleryEvents",
+          (SELECT COALESCE(json_agg( (to_jsonb(t) - 'src') || jsonb_build_object('src', CASE WHEN src LIKE 'data:image%' THEN '/api/image/gallery_photos/' || id || '/src' ELSE src END) ), '[]'::json) FROM (SELECT * FROM gallery_photos ORDER BY sort_order ASC, id ASC) t) AS "galleryPhotos",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM reference_list ORDER BY sort_order ASC, id ASC) t) AS "refRows",
+          (SELECT COALESCE(json_agg( (to_jsonb(t) - 'image') || jsonb_build_object('image', CASE WHEN image LIKE 'data:image%' THEN '/api/image/spotlights/' || id || '/image' ELSE image END) ), '[]'::json) FROM (SELECT * FROM spotlights ORDER BY sort_order ASC, id ASC) t) AS "spotRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM courses ORDER BY sort_order ASC, id ASC) t) AS "courseRows",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM about_pills ORDER BY sort_order ASC, id ASC) t) AS "pillRows"
+      `;
+
+      const parseJson = (val) => {
+        if (typeof val === 'string') {
+          try { return JSON.parse(val); } catch (e) { return []; }
+        }
+        return val || [];
+      };
+
+      const settingsRow = parseJson(allData.settingsRow);
+      const interests = parseJson(allData.interests);
+      const langs = parseJson(allData.langs);
+      const roles = parseJson(allData.roles);
+      const areas = parseJson(allData.areas);
+      const eduRows = parseJson(allData.eduRows);
+      const expRows = parseJson(allData.expRows);
+      const pubRows = parseJson(allData.pubRows);
+      const projRows = parseJson(allData.projRows);
+      const certRows = parseJson(allData.certRows);
+      const awardRows = parseJson(allData.awardRows);
+      const actRows = parseJson(allData.actRows);
+      const galleryEvents = parseJson(allData.galleryEvents);
+      const galleryPhotos = parseJson(allData.galleryPhotos);
+      const refRows = parseJson(allData.refRows);
+      const spotRows = parseJson(allData.spotRows);
+      const courseRows = parseJson(allData.courseRows);
+      const pillRows = parseJson(allData.pillRows);
+
+      const s = settingsRow[0] || {};
+
+      // Build gallery with nested photos
+      const byEvent = {};
+      for (const p of galleryPhotos) {
+        (byEvent[p.event_id] = byEvent[p.event_id] || []).push({ src: p.src, caption: p.caption });
+      }
+      
+      // Vercel Edge Caching: Cache for 5 minutes at the edge CDN, serve stale while revalidating.
+      // This drops data pull time from ~800ms down to ~10ms for 99% of visitors!
+      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=86400');
+
+      res.json({
+        settings: {
+          profile: {
+            name: s.name || '', title: s.title || '', email: s.email || '',
+            phone: s.phone || '', location: s.location || '', avatar: s.avatar || '',
+            heroStatusText: s.hero_status_text || 'Open to research',
+            objective: s.objective || '',
+            stats: {
+              publications: s.stat_publications || 0, projects: s.stat_projects || 0,
+              awards: s.stat_awards || 0, certifications: s.stat_certifications || 0,
+            },
+            socials: {
+              github: s.social_github || '', linkedin: s.social_linkedin || '',
+              researchgate: s.social_researchgate || '', scholar: s.social_scholar || '',
+              orcid: s.social_orcid || '', x: s.social_x || '',
+            },
+          },
+          researchInterests: interests.map((r) => ({ icon: r.icon, topic: r.topic, desc: r.description })),
+          skills: {
+            languages: splitCommas(s.skills_languages), frameworks: splitCommas(s.skills_frameworks),
+            tools: splitCommas(s.skills_tools), researchMethods: splitCommas(s.skills_research_methods),
+          },
+          spokenLanguages: langs.map((l) => ({ name: l.name, level: l.level })),
+          about: {
+            kicker: s.about_kicker || 'ABOUT ME',
+            headline: s.about_headline || 'AI research with a practical mindset.',
+            text: s.about_text || '',
+            research_statement_text: s.research_statement_text || '',
+            statusText: s.about_status_text || 'Open to research opportunities',
+            pills: pillRows && pillRows.length > 0 ? pillRows.map(p => ({
+              id: p.id,
+              label: p.label,
+              icon: p.icon || 'bi-cpu',
+              colorType: p.color_type || 'primary'
+            })) : [],
+          },
+          personalInfo: {
+            fatherName: s.father_name || '',
+            motherName: s.mother_name || '',
+            dob: s.dob || '',
+            religion: s.religion || '',
+            nid: s.nid || '',
+            maritalStatus: s.marital_status || '',
+            bloodGroup: s.blood_group || '',
+            nationality: s.nationality || '',
+            address: s.address || s.location || 'Rajshahi, Bangladesh',
+          },
+          teaching: {
+            philosophy: s.teaching_philosophy || '',
+            roles: roles.map((r) => ({ title: r.title, desc: r.description })),
+            areas: areas.map((a) => ({ topic: a.topic, desc: a.description })),
+            mentoringText: s.teaching_mentoring_text || '',
+          },
+          footerText: s.footer_text || '',
+          cvLastUpdated: s.cv_last_updated || '',
+          cvDownloadUrl: s.cv_download_url || '',
+        },
+        education: eduRows.map((r) => serializeRow('education', r)),
+        experience: expRows.map((r) => serializeRow('experience', r)),
+        publications: pubRows.map((r) => serializeRow('publications', r)),
+        projects: projRows.map((r) => serializeRow('projects', r)),
+        certifications: certRows.map((r) => serializeRow('certifications', r)),
+        awards: awardRows.map((r) => serializeRow('awards', r)),
+        activities: actRows.map((r) => serializeRow('activities', r)),
+        spotlights: spotRows.map((r) => serializeRow('spotlights', r)),
+        courses: courseRows.map((r) => serializeRow('courses', r)),
+        gallery: galleryEvents.map((e) => ({
+          id: e.id, title: e.title, year: e.year, category: e.category, venue: e.venue, date: e.date, order: e.sort_order,
+          photos: byEvent[e.id] || [],
+        })),
+        references: refRows.map((r) => serializeRow('references', r)),
+      });
+    } catch (err) { next(err); }
+  });
+
+  app.get('/api/settings', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [allData] = await sql`
+        SELECT
+          (SELECT json_agg(t) FROM (SELECT * FROM site_settings WHERE id = 1) t) AS "settingsRow",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM research_interests ORDER BY sort_order ASC, id ASC) t) AS "interests",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM spoken_languages ORDER BY sort_order ASC, id ASC) t) AS "langs",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_roles ORDER BY sort_order ASC, id ASC) t) AS "roles",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_areas ORDER BY sort_order ASC, id ASC) t) AS "areas"
+      `;
+      const settingsRow = allData.settingsRow || [];
+      const s = settingsRow[0] || {};
+      const interests = allData.interests || [];
+      const langs = allData.langs || [];
+      const roles = allData.roles || [];
+      const areas = allData.areas || [];
+
+      res.json({
+        profile: {
+          name: s.name || '',
+          title: s.title || '',
+          email: s.email || '',
+          phone: s.phone || '',
+          location: s.location || '',
+          avatar: s.avatar || '',
+          objective: s.objective || '',
+          stats: {
+            publications: s.stat_publications || 0,
+            projects: s.stat_projects || 0,
+            awards: s.stat_awards || 0,
+            certifications: s.stat_certifications || 0,
+          },
+          socials: {
+            github: s.social_github || '',
+            linkedin: s.social_linkedin || '',
+            researchgate: s.social_researchgate || '',
+            scholar: s.social_scholar || '',
+            orcid: s.social_orcid || '',
+          },
+        },
+        researchInterests: interests.map((r) => ({ icon: r.icon, topic: r.topic, desc: r.description })),
+        skills: {
+          languages: splitCommas(s.skills_languages),
+          frameworks: splitCommas(s.skills_frameworks),
+          tools: splitCommas(s.skills_tools),
+          researchMethods: splitCommas(s.skills_research_methods),
+        },
+        spokenLanguages: langs.map((l) => ({ name: l.name, level: l.level })),
+        personalInfo: {
+          fatherName: s.father_name || '',
+          motherName: s.mother_name || '',
+          dob: s.dob || '',
+          religion: s.religion || '',
+          nid: s.nid || '',
+          maritalStatus: s.marital_status || '',
+          bloodGroup: s.blood_group || '',
+          nationality: s.nationality || '',
+          address: s.address || s.location || 'Rajshahi, Bangladesh',
+        },
+        teaching: {
+          philosophy: s.teaching_philosophy || '',
+          roles: roles.map((r) => ({ title: r.title, desc: r.description })),
+          areas: areas.map((a) => ({ topic: a.topic, desc: a.description })),
+          mentoringText: s.teaching_mentoring_text || '',
+        },
+        footerText: s.footer_text || '',
+        cvLastUpdated: s.cv_last_updated || '',
+        cvDownloadUrl: s.cv_download_url || '',
+      });
+    } catch (err) { next(err); }
+  });
+
+  app.get('/api/gallery', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const events = await sql`SELECT * FROM gallery_events ORDER BY sort_order ASC, id ASC`;
+      const photos = await sql`SELECT * FROM gallery_photos ORDER BY sort_order ASC, id ASC`;
+      const byEvent = {};
+      for (const p of photos) {
+        (byEvent[p.event_id] = byEvent[p.event_id] || []).push({ src: p.src, caption: p.caption });
+      }
+      res.json(events.map((e) => ({
+        id: e.id, title: e.title, year: e.year, category: e.category, venue: e.venue, date: e.date, order: e.sort_order,
+        photos: byEvent[e.id] || [],
+      })));
+    } catch (err) { next(err); }
+  });
+
+  app.get('/api/gallery/:id', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [e] = await sql`SELECT * FROM gallery_events WHERE id = ${req.params.id}`;
+      if (!e) return res.status(404).json({ detail: 'Not found.' });
+      const photos = await sql`SELECT * FROM gallery_photos WHERE event_id = ${e.id} ORDER BY sort_order ASC, id ASC`;
+      res.json({
+        id: e.id, title: e.title, year: e.year, category: e.category, venue: e.venue, date: e.date, order: e.sort_order,
+        photos: photos.map((p) => ({ src: p.src, caption: p.caption })),
+      });
+    } catch (err) { next(err); }
+  });
+
+  for (const key of PUBLIC_API_KEYS) {
+    const resource = RESOURCES[key];
+    app.get(`/api/${key}`, async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const rows = await sql(
+          `SELECT * FROM ${resource.table} ORDER BY sort_order ASC, id ASC`
+        );
+        res.json(rows.map((r) => serializeRow(key, r)));
+      } catch (err) { next(err); }
+    });
+
+    app.get(`/api/${key}/:id`, async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const rows = await sql(
+          `SELECT * FROM ${resource.table} WHERE id = $1`,
+          [req.params.id]
+        );
+        if (!rows.length) return res.status(404).json({ detail: 'Not found.' });
+        res.json(serializeRow(key, rows[0]));
+      } catch (err) { next(err); }
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Admin panel — session-cookie protected, server-rendered HTML forms.
+  // ─────────────────────────────────────────────────────────────────────
+
+  app.get('/admin/login', (req, res) => {
+    if (auth.isAuthenticated(req)) return res.redirect('/admin');
+    res.send(layout({
+      title: 'Log in', authed: false,
+      body: `<div class="login-wrapper">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="login-logo">
+              <i class="bi bi-shield-lock-fill"></i>
+            </div>
+            <h1>Welcome Back</h1>
+            <p class="muted">Sign in to Portfolio Admin</p>
+          </div>
+          <form method="post" action="/admin/login" class="login-form">
+            <div class="form-group-floating">
+              <input type="text" name="username" id="username" placeholder="Username" autocomplete="username" required />
+              <i class="bi bi-person input-icon"></i>
+            </div>
+            <div class="form-group-floating">
+              <input type="password" name="password" id="password" placeholder="Password" autocomplete="current-password" required />
+              <i class="bi bi-key input-icon"></i>
+            </div>
+            <button class="btn btn-block btn-lg" type="submit" style="background:var(--primary); color:#fff; border:none; display:flex; align-items:center;">
+              <span>Log in</span> <i class="bi bi-arrow-right"></i>
+            </button>
+          </form>
+        </div>
+      </div>`,
+      flash: req.query.error ? 'Invalid username or password.' : null,
+    }));
+  });
+
+  app.post('/admin/login', async (req, res, next) => {
+    try {
+      const { username, password } = req.body;
+      const sql = getSql();
+      await ensureTables(sql);
+
+      // Ensure admin_users table exists
+      await sql(`CREATE TABLE IF NOT EXISTS admin_users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL
+      )`);
+
+      // Seed admin_users table if empty
+      const adminCount = await sql`SELECT count(*) FROM admin_users`;
+      if (!adminCount || Number(adminCount[0]?.count) === 0) {
+        const expectedUser = process.env.ADMIN_USERNAME;
+        const expectedPass = process.env.ADMIN_PASSWORD;
+        if (expectedUser && expectedPass) {
+          const hash = auth.hashPassword(expectedPass);
+          await sql`INSERT INTO admin_users (id, username, password_hash) VALUES (1, ${expectedUser}, ${hash}) ON CONFLICT DO NOTHING`;
+        } else {
+          console.warn('ADMIN SEED: ADMIN_USERNAME or ADMIN_PASSWORD env vars not set. Skipping admin user creation.');
+        }
+      }
+
+      if (await auth.checkCredentials(sql, username, password)) {
+        res.setHeader('Set-Cookie', auth.createSessionCookie());
+        return res.redirect('/admin');
+      }
+      res.redirect('/admin/login?error=1');
+    } catch (err) {
+      console.error('Login error:', err);
+      res.redirect('/admin/login?error=1');
+    }
+  });
+
+  app.post('/admin/logout', (req, res) => {
+    res.setHeader('Set-Cookie', auth.clearSessionCookie());
+    res.redirect('/admin/login');
+  });
+
+  app.use('/admin', (req, res, next) => {
+    if (req.path === '/login') return next();
+    auth.requireAdmin(req, res, next);
+  });
+
+  app.get('/admin/change-password', (req, res) => {
+    res.send(layout({
+      title: 'Change Password', authed: true,
+      body: `<div class="card" style="max-width:400px; margin: 40px auto;">
+        <h2>Change Password</h2>
+        <form method="post" action="/admin/change-password">
+          <label>Current Password</label>
+          <input type="password" name="oldPassword" required />
+          <label>New Password</label>
+          <input type="password" name="newPassword" required />
+          <label>Confirm New Password</label>
+          <input type="password" name="confirmPassword" required />
+          <div class="actions">
+            <a href="/admin" class="btn secondary">Cancel</a>
+            <button class="btn" type="submit">Save</button>
+          </div>
+        </form>
+      </div>`,
+      flash: req.query.error ? 'Password change failed. Check your current password and ensure new passwords match.' : (req.query.success ? 'Password successfully changed.' : null)
+    }));
+  });
+
+  app.post('/admin/change-password', async (req, res) => {
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+    if (!newPassword || newPassword !== confirmPassword) {
+      return res.redirect('/admin/change-password?error=1');
+    }
+    const sql = getSql();
+    let rows = await sql`SELECT * FROM admin_users LIMIT 1`;
+    if (rows.length === 0) {
+      const expectedPass = process.env.ADMIN_PASSWORD || 'password';
+      if (oldPassword !== expectedPass) {
+        return res.redirect('/admin/change-password?error=1');
+      }
+      const expectedUser = process.env.ADMIN_USERNAME || 'admin';
+      const newHash = auth.hashPassword(newPassword);
+      await sql`INSERT INTO admin_users (id, username, password_hash) VALUES (1, ${expectedUser}, ${newHash})`;
+      return res.redirect('/admin/change-password?success=1');
+    }
+    if (!auth.verifyPassword(oldPassword, rows[0].password_hash)) {
+      return res.redirect('/admin/change-password?error=1');
+    }
+    const newHash = auth.hashPassword(newPassword);
+    await sql`UPDATE admin_users SET password_hash = ${newHash} WHERE id = ${rows[0].id}`;
+    res.redirect('/admin/change-password?success=1');
+  });
+
+  const DASHBOARD_GROUPS = [
+    {
+      title: 'Core Info',
+      items: [
+        { key: 'about', label: 'About Section & Pills', desc: 'Headline, narrative paragraphs & meta pills', icon: 'bi-person-lines-fill', color: '#10b981', table: 'about_pills' },
+        { key: 'spotlights', label: 'Spotlight Highlights', desc: 'Hero slideshow highlight cards', icon: 'bi-stars', color: '#f59e0b', table: 'spotlights' },
+        { key: 'settings', label: 'Site Settings', desc: 'Profile, socials, skills, personal info', icon: 'bi-gear-fill', color: '#6366f1', table: null },
+        { key: 'spoken-languages', label: 'Spoken Languages', desc: 'Manage spoken languages', icon: 'bi-translate', color: '#8b5cf6', table: 'spoken_languages' }
+      ]
+    },
+    {
+      title: 'Academic & Career',
+      items: [
+        { key: 'education', label: 'Education', desc: 'Manage education', icon: 'bi-mortarboard-fill', color: '#ec4899', table: 'education' },
+        { key: 'experience', label: 'Experience', desc: 'Manage experience', icon: 'bi-briefcase-fill', color: '#f43f5e', table: 'experience' },
+        { key: 'publications', label: 'Publications', desc: 'Manage publications', icon: 'bi-journal-text', color: '#f97316', table: 'publications' },
+        { key: 'research-interests', label: 'Research Interests', desc: 'Manage research interests', icon: 'bi-lightbulb-fill', color: '#eab308', table: 'research_interests' },
+        { key: 'references', label: 'References', desc: 'Manage references', icon: 'bi-person-lines-fill', color: '#84cc16', table: 'reference_list' }
+      ]
+    },
+    {
+      title: 'Portfolio & Media',
+      items: [
+        { key: 'projects', label: 'Projects', desc: 'Software & Research Projects', icon: 'bi-kanban', color: '#10b981', table: 'projects' }
+      ]
+    },
+    {
+      title: 'Media',
+      items: [
+        { key: 'gallery', label: 'Gallery Events', desc: 'Events + photos', icon: 'bi-images', color: '#14b8a6', table: 'gallery_events' },
+        { key: 'blog', label: 'Blog Posts', desc: 'Manage blog posts', icon: 'bi-pencil-square', color: '#06b6d4', table: 'blog_posts' }
+      ]
+    },
+    {
+      title: 'Achievements',
+      items: [
+        { key: 'awards', label: 'Awards', desc: 'Manage awards', icon: 'bi-trophy-fill', color: '#0ea5e9', table: 'awards' },
+        { key: 'certifications', label: 'Certifications', desc: 'Manage certifications', icon: 'bi-patch-check-fill', color: '#3b82f6', table: 'certifications' },
+        { key: 'activities', label: 'Activities', desc: 'Manage activities', icon: 'bi-activity', color: '#6366f1', table: 'activities' }
+      ]
+    },
+    {
+      title: 'Teaching',
+      items: [
+        { key: 'teaching-roles', label: 'Teaching Roles', desc: 'Manage teaching roles', icon: 'bi-person-badge', color: '#8b5cf6', table: 'teaching_roles' },
+        { key: 'teaching-areas', label: 'Teaching Areas', desc: 'Manage teaching areas', icon: 'bi-book-half', color: '#d946ef', table: 'teaching_areas' },
+        { key: 'courses', label: 'Teaching Courses', desc: 'Manage teaching courses', icon: 'bi-journal-bookmark-fill', color: '#ec4899', table: 'courses' }
+      ]
+    },
+    {
+      title: 'Inquiries & Messages',
+      items: [
+        { key: 'contact-messages', label: 'Contact Messages', desc: 'Inquiries from contact form', icon: 'bi-envelope-paper-fill', color: '#f59e0b', table: 'contact_messages' }
+      ]
+    }
+  ];
+
+  app.get('/admin', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      const counts = {};
+
+      await Promise.all(
+        DASHBOARD_GROUPS.flatMap(g => g.items).map(async (item) => {
+          if (item.table) {
+            try {
+              const result = await sql(`SELECT count(*) as count FROM ${item.table} ${item.where ? 'WHERE ' + item.where : ''}`);
+              counts[item.key] = result && result[0] ? result[0].count : 0;
+            } catch (e) {
+              counts[item.key] = 0;
+            }
+          }
+        })
+      );
+
+      let groupsHtml = '';
+      for (const group of DASHBOARD_GROUPS) {
+        groupsHtml += `<h2 style="margin-top:48px; margin-bottom:20px; font-size:22px; color:var(--text-main); font-weight:700; letter-spacing:-0.03em;">${group.title}</h2><div class="grid-links">`;
+        for (const item of group.items) {
+          const countLabel = item.table ? `<div style="margin-top:12px;"><span style="font-size:12px; font-weight:600; color:${item.color}; background:${item.color}15; padding:4px 10px; border-radius:20px;">${counts[item.key]} items</span></div>` : '';
+          groupsHtml += `
+            <a href="/admin/${item.key}">
+              <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+                <div style="width:36px; height:36px; border-radius:8px; background:${item.color}15; display:flex; align-items:center; justify-content:center;">
+                  <i class="bi ${item.icon}" style="color:${item.color}; font-size:18px;"></i>
+                </div>
+                <div style="font-weight:600; color:var(--text-main); font-size:16px;">${item.label}</div>
+              </div>
+              <span style="display:block; font-weight:400; color:var(--text-muted); font-size:14px;">${item.desc}</span>
+              ${countLabel}
+            </a>`;
+        }
+        groupsHtml += `</div>`;
+      }
+
+      res.send(layout({
+        title: 'Dashboard', authed: true,
+        body: `<div style="margin-top:32px; margin-bottom:16px;">
+            <h1 style="font-size:36px; font-weight:800; letter-spacing:-0.04em;">Dashboard</h1>
+            <p class="muted" style="font-size:16px;">Edits here appear on the live site immediately — no redeploy needed.</p>
+          </div>
+          ${groupsHtml}
+          <div style="height:64px;"></div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  // Custom route for /admin/projects to render two tables on one page
+  app.get('/admin/projects', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      const rows = await sql(`SELECT * FROM projects ORDER BY sort_order ASC, id ASC`);
+      
+      const researchRows = rows.filter(r => r.category === 'research' || r.category === 'thesis');
+      const devRows = rows.filter(r => r.category === 'development');
+      
+      const resource = RESOURCES.projects;
+      
+      const tableResearch = renderTable({ resourceKey: 'projects', label: 'Research & Thesis Projects', fields: resource.fields, rows: researchRows });
+      const tableDev = renderTable({ resourceKey: 'projects', label: 'Software & Web Development Projects', fields: resource.fields, rows: devRows });
+      
+      res.send(layout({
+        title: 'Projects', authed: true,
+        body: `<h1>Projects</h1>
+          <p class="muted">Manage your projects here. They are visually separated into Research and Software projects.</p>
+          <div style="margin-bottom: 48px;">${tableResearch}</div>
+          <div>${tableDev}</div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  // Generic CRUD for every "simple list" resource.
+  for (const key of ADMIN_RESOURCE_KEYS) {
+    const resource = RESOURCES[key];
+
+    // Only register GET /admin/:key if it's not 'projects', because we already registered a custom one above
+    if (key !== 'projects') {
+      app.get(`/admin/${key}`, async (req, res, next) => {
+        try {
+          const sql = getSql();
+          await ensureTables(sql);
+          let rows = [];
+          const whereClause = resource.where ? `WHERE ${resource.where}` : '';
+          try {
+            rows = await sql(`SELECT * FROM ${resource.table} ${whereClause} ORDER BY sort_order ASC, id ASC`);
+          } catch (queryErr) {
+            if (queryErr.message && queryErr.message.includes('does not exist')) {
+              // Force table creation and retry
+              tablesEnsured = false;
+              await ensureTables(sql);
+              try {
+                rows = await sql(`SELECT * FROM ${resource.table} ${whereClause} ORDER BY sort_order ASC, id ASC`);
+              } catch (retryErr) {
+                rows = [];
+              }
+            } else {
+              throw queryErr;
+            }
+          }
+          res.send(layout({
+            title: resource.label, authed: true,
+            body: `<h1>${esc(resource.label)}</h1>` + renderTable({ resourceKey: key, label: resource.label, fields: resource.fields, rows }),
+          }));
+        } catch (err) { next(err); }
+      });
+    }
+
+    app.get(`/admin/${key}/new`, (req, res) => {
+      res.send(layout({
+        title: `New ${resource.label}`, authed: true,
+        body: `<h1>New ${esc(resource.label)}</h1><div class="card">${renderForm({
+          fields: resource.fields, action: `/admin/${key}/new`, submitLabel: 'Create',
+        })}</div>`,
+      }));
+    });
+
+    app.post(`/admin/${key}/new`, upload.single('image_file'), async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const values = extractValues(resource.fields, req.body);
+        const hasImageField = resource.fields.some(f => f.key === 'image_file');
+        if (req.body.image_file_b64) {
+          values.image = req.body.image_file_b64;
+        } else if (req.file && hasImageField) {
+          const b64 = req.file.buffer.toString('base64');
+          values.image = `data:${req.file.mimetype};base64,${b64}`;
+        }
+        const dbFields = resource.fields.filter(f => f.key !== 'image_file');
+        const order = Number(req.body.order) || 0;
+        const cols = ['sort_order', ...dbFields.map((f) => f.key)];
+        const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+        await sql(
+          `INSERT INTO ${resource.table} (${cols.join(', ')}) VALUES (${placeholders})`,
+          [order, ...dbFields.map((f) => values[f.key])]
+        );
+        res.redirect(`/admin/${key}`);
+      } catch (err) { next(err); }
+    });
+
+    app.get(`/admin/${key}/:id/edit`, async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const rows = await sql(`SELECT * FROM ${resource.table} WHERE id = $1`, [req.params.id]);
+        if (!rows.length) return res.status(404).send('Not found');
+        res.send(layout({
+          title: `Edit ${resource.label}`, authed: true,
+          body: `<h1>Edit ${esc(resource.label)}</h1><div class="card">${renderForm({
+            fields: resource.fields, row: rows[0], action: `/admin/${key}/${req.params.id}/edit`, submitLabel: 'Save',
+          })}</div>`,
+        }));
+      } catch (err) { next(err); }
+    });
+
+    app.post(`/admin/${key}/:id/edit`, upload.single('image_file'), async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const values = extractValues(resource.fields, req.body);
+        const hasImageField = resource.fields.some(f => f.key === 'image_file');
+        if (req.body.image_file_b64) {
+          values.image = req.body.image_file_b64;
+        } else if (req.file && hasImageField) {
+          const b64 = req.file.buffer.toString('base64');
+          values.image = `data:${req.file.mimetype};base64,${b64}`;
+        } else if (hasImageField && !values.image) {
+          // If no new file uploaded and image url is empty, keep existing image
+          try {
+            const [existing] = await sql(`SELECT image FROM ${resource.table} WHERE id = $1`, [req.params.id]);
+            if (existing && existing.image) values.image = existing.image;
+          } catch (imgErr) { /* column may not exist, ignore */ }
+        }
+        const dbFields = resource.fields.filter(f => f.key !== 'image_file');
+        const order = Number(req.body.order) || 0;
+        const setSql = dbFields.map((f, i) => `${f.key} = $${i + 2}`).join(', ');
+        await sql(
+          `UPDATE ${resource.table} SET sort_order = $1, ${setSql} WHERE id = $${dbFields.length + 2}`,
+          [order, ...dbFields.map((f) => values[f.key]), req.params.id]
+        );
+        res.redirect(`/admin/${key}`);
+      } catch (err) { next(err); }
+    });
+
+    app.post(`/admin/${key}/:id/delete`, async (req, res, next) => {
+      try {
+        const sql = getSql();
+        await sql(`DELETE FROM ${resource.table} WHERE id = $1`, [req.params.id]);
+        res.redirect(`/admin/${key}`);
+      } catch (err) { next(err); }
+    });
+
+    app.post(`/admin/${key}/:id/reorder`, async (req, res, next) => {
+      try {
+        const sql = getSql();
+        const order = Number(req.body.order) || 0;
+        await sql(`UPDATE ${resource.table} SET sort_order = $1 WHERE id = $2`, [order, req.params.id]);
+        res.redirect(`/admin/${key}`);
+      } catch (err) { next(err); }
+    });
+  }
+
+  // --- Gallery photos (nested under an event) ---
+  app.get('/admin/gallery/:id/photos', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [event] = await sql(`SELECT * FROM gallery_events WHERE id = $1`, [req.params.id]);
+      if (!event) return res.status(404).send('Not found');
+      const photos = await sql(
+        `SELECT * FROM gallery_photos WHERE event_id = $1 ORDER BY sort_order ASC, id ASC`,
+        [req.params.id]
+      );
+      const rows = photos
+        .map((p) => `<tr>
+          <td style="width: 60px;"><img src="${esc(p.src.startsWith('media/') ? 'https://rashelmahmudrabbi.github.io/' + p.src : p.src).replace(/ /g, '%20')}" alt="Thumbnail" style="height: 48px; width: 48px; object-fit: cover; border-radius: 4px; display: block; background: var(--surface-2);" /></td>
+          <td>${esc(p.caption)}</td>
+          <td>
+            <form method="post" action="/admin/gallery/${event.id}/photos/${p.id}/reorder" class="inline" style="margin:0;">
+              <input type="number" name="order" value="${p.sort_order ?? 0}" style="width: 70px; padding: 4px; text-align: center;" onchange="this.form.submit()" />
+            </form>
+          </td>
+          <td style="white-space:nowrap;">
+            <a class="link" href="/admin/gallery/${event.id}/photos/${p.id}/edit">Edit</a>
+            <form class="inline" method="post" action="/admin/gallery/${event.id}/photos/${p.id}/delete" onsubmit="return confirm('Delete this photo?');">
+              <button class="link" style="background:none;border:none;color:#dc2626;cursor:pointer;padding:0;">Delete</button>
+            </form>
+          </td>
+        </tr>`)
+        .join('');
+      res.send(layout({
+        title: `Photos — ${event.title}`, authed: true,
+        body: `<h1>Photos — ${esc(event.title)}</h1>
+          <p><a class="link" href="/admin/gallery">&larr; Back to Gallery</a></p>
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+              <h2 style="margin:0;">Photos</h2>
+              <a class="btn" href="/admin/gallery/${event.id}/photos/new">+ Add photo</a>
+            </div>
+            <table>
+              <thead><tr><th>Image</th><th>Caption</th><th>Order</th><th></th></tr></thead>
+              <tbody>${rows || '<tr><td colspan="4" class="muted">No photos yet.</td></tr>'}</tbody>
+            </table>
+          </div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.get('/admin/gallery/:id/photos/new', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [event] = await sql(`SELECT * FROM gallery_events WHERE id = $1`, [req.params.id]);
+      if (!event) return res.status(404).send('Not found');
+      res.send(layout({
+        title: 'New Photo', authed: true,
+        body: `<h1>New Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
+          fields: PHOTO_FIELDS, action: `/admin/gallery/${event.id}/photos/new`, submitLabel: 'Create',
+        })}</div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/photos/new', upload.single('photo_file'), async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+      let dataUri = req.body.src || req.body.photo_file_b64 || '';
+      if (req.file && !dataUri) {
+        const b64 = req.file.buffer.toString('base64');
+        dataUri = `data:${req.file.mimetype};base64,${b64}`;
+      }
+      await sql(
+        `INSERT INTO gallery_photos (event_id, sort_order, src, caption) VALUES ($1, $2, $3, $4)`,
+        [req.params.id, order, dataUri, req.body.caption || '']
+      );
+      res.redirect(`/admin/gallery/${req.params.id}/photos`);
+    } catch (err) { next(err); }
+  });
+
+  app.get('/admin/gallery/:id/photos/:photoId/edit', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [event] = await sql(`SELECT * FROM gallery_events WHERE id = $1`, [req.params.id]);
+      const [photo] = await sql(`SELECT * FROM gallery_photos WHERE id = $1`, [req.params.photoId]);
+      if (!event || !photo) return res.status(404).send('Not found');
+      res.send(layout({
+        title: 'Edit Photo', authed: true,
+        body: `<h1>Edit Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
+          fields: PHOTO_FIELDS, row: photo, action: `/admin/gallery/${event.id}/photos/${photo.id}/edit`, submitLabel: 'Save',
+        })}</div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/photos/:photoId/edit', upload.single('photo_file'), async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+
+      const src = req.body.src || req.body.photo_file_b64;
+      if (src) {
+        await sql(
+          `UPDATE gallery_photos SET sort_order = $1, src = $2, caption = $3 WHERE id = $4`,
+          [order, src, req.body.caption || '', req.params.photoId]
+        );
+      } else if (req.file) {
+        const b64 = req.file.buffer.toString('base64');
+        const dataUri = `data:${req.file.mimetype};base64,${b64}`;
+        await sql(
+          `UPDATE gallery_photos SET sort_order = $1, src = $2, caption = $3 WHERE id = $4`,
+          [order, dataUri, req.body.caption || '', req.params.photoId]
+        );
+      } else {
+        await sql(
+          `UPDATE gallery_photos SET sort_order = $1, caption = $2 WHERE id = $3`,
+          [order, req.body.caption || '', req.params.photoId]
+        );
+      }
+
+      res.redirect(`/admin/gallery/${req.params.id}/photos`);
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/photos/:photoId/delete', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await sql(`DELETE FROM gallery_photos WHERE id = $1`, [req.params.photoId]);
+      res.redirect(`/admin/gallery/${req.params.id}/photos`);
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/photos/:photoId/reorder', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+      await sql(`UPDATE gallery_photos SET sort_order = $1 WHERE id = $2`, [order, req.params.photoId]);
+      res.redirect(`/admin/gallery/${req.params.id}/photos`);
+    } catch (err) { next(err); }
+  });
+
+  // --- CV Management ---
+  app.get('/admin/cv', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [settings] = await sql(`SELECT cv_download_url FROM site_settings WHERE id = 1`);
+      res.send(layout({
+        title: 'Manage CV',
+        authed: true,
+        body: renderCvAdmin(settings?.cv_download_url),
+        flash: req.query.success ? 'CV updated successfully!' : ''
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/cv', upload.single('cv_file'), async (req, res, next) => {
+    try {
+      if (req.file) {
+        const sql = getSql();
+        const b64 = req.file.buffer.toString('base64');
+        const dataUri = `data:${req.file.mimetype};base64,${b64}`;
+
+        await sql(`CREATE TABLE IF NOT EXISTS cv_files (
+          id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+          file_data TEXT,
+          mimetype TEXT,
+          filename TEXT
+        )`);
+        await sql(`DELETE FROM cv_files WHERE id = 1`);
+        await sql(`INSERT INTO cv_files (id, file_data, mimetype, filename) VALUES (1, $1, $2, $3)`, [b64, req.file.mimetype, req.file.originalname]);
+        await sql(`UPDATE site_settings SET cv_last_updated = $1 WHERE id = 1`, [new Date().getFullYear().toString()]);
+      }
+      res.redirect('/admin/cv?success=1');
+    } catch (err) { next(err); }
+  });
+
+  // --- Dedicated About Section & Meta Pills Unified Manager ---
+  app.get('/admin/about', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      const [settingsRow] = await sql`SELECT * FROM site_settings WHERE id = 1`;
+      const pills = await sql`SELECT * FROM about_pills ORDER BY sort_order ASC, id ASC`;
+      res.send(layout({
+        title: 'About Section & Pills',
+        authed: true,
+        body: renderAboutAdmin({ settings: settingsRow || {}, pills }),
+        flash: req.query.success ? 'About section saved successfully!' : null
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/about', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      let { about_kicker, about_headline, about_status_text, about_text, research_statement_text } = req.body;
+      
+      // Strip block-level layout tags if admin accidentally pasted full page HTML
+      const stripLayoutTags = (html) => html ? html.replace(/<\/?(section|div|article|main|header|footer)[^>]*>/gi, '').trim() : '';
+      about_text = stripLayoutTags(about_text);
+      research_statement_text = stripLayoutTags(research_statement_text);
+
+      await sql(
+        `UPDATE site_settings SET
+          about_kicker = $1,
+          about_headline = $2,
+          about_status_text = $3,
+          about_text = $4,
+          research_statement_text = $5
+        WHERE id = 1`,
+        [about_kicker || 'ABOUT ME', about_headline || '', about_status_text || '', about_text || '', research_statement_text || '']
+      );
+      res.redirect('/admin/about?success=1');
+    } catch (err) { next(err); }
+  });
+
+  // --- Site Settings (singleton) ---
+  app.get('/admin/settings', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [row] = await sql`SELECT * FROM site_settings WHERE id = 1`;
+      const s = row || {};
+      res.send(layout({
+        title: 'Site Settings', authed: true,
+        body: `<h1>Site Settings</h1>
+          <p class="muted">Manage the nested lists separately:
+            <a class="link" href="/admin/research-interests">Research Interests</a>
+            <a class="link" href="/admin/spoken-languages">Spoken Languages</a>
+            <a class="link" href="/admin/teaching-roles">Teaching Roles</a>
+            <a class="link" href="/admin/teaching-areas">Teaching Areas</a>
+          </p>
+          <div class="card">${renderForm({
+          fields: SETTINGS_FIELDS, row: s, action: '/admin/settings', submitLabel: 'Save Settings', includeOrder: false,
+        })}</div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/settings', upload.single('avatar_file'), async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      const values = extractValues(SETTINGS_FIELDS, req.body);
+
+      if (req.body.avatar_file_b64) {
+        values.avatar = req.body.avatar_file_b64;
+      } else if (req.file) {
+        const b64 = req.file.buffer.toString('base64');
+        values.avatar = `data:${req.file.mimetype};base64,${b64}`;
+      } else if (!values.avatar) {
+        const [existing] = await sql`SELECT avatar FROM site_settings WHERE id = 1`;
+        if (existing && existing.avatar) values.avatar = existing.avatar;
+      }
+
+      const dbFields = SETTINGS_FIELDS.filter(f => f.key !== 'avatar_file');
+      const cols = dbFields.map((f) => f.key);
+      const setSql = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+      const params = [1, ...cols.map((c) => values[c])];
+      await sql(
+        `INSERT INTO site_settings (id, ${cols.join(', ')}) VALUES (${params.map((_, i) => `$${i + 1}`).join(', ')})
+         ON CONFLICT (id) DO UPDATE SET ${setSql}`,
+        params
+      );
+      res.redirect('/admin/settings');
+    } catch (err) { next(err); }
+  });
+
+  // --- Gallery events list (uses the generic table renderer + a custom "photos" link) ---
+  app.get('/admin/gallery', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const rows = await sql`SELECT * FROM gallery_events ORDER BY sort_order ASC, id ASC`;
+      res.send(layout({
+        title: 'Gallery', authed: true,
+        body: `<h1>Gallery Events</h1>` + renderTable({
+          resourceKey: 'gallery', label: 'Gallery Events',
+          fields: RESOURCES.gallery ? RESOURCES.gallery.fields : GALLERY_EVENT_FIELDS,
+          rows,
+          extraCol: (r) => `<a class="btn secondary" style="padding:4px 10px; font-size:12px; margin-right:16px;" href="/admin/gallery/${r.id}/photos">Manage Photos</a>`,
+        }),
+      }));
+    } catch (err) { next(err); }
+  });
+
+  const NEW_GALLERY_EVENT_FIELDS = [
+    { key: 'title', label: 'Title', type: 'text' },
+    { key: 'year', label: 'Year', type: 'text' },
+    { key: 'category', label: 'Category (Optional)', type: 'text' },
+    { key: 'venue', label: 'Venue (Optional)', type: 'text' },
+    { key: 'date', label: 'Date (Optional)', type: 'text' },
+    { key: 'photo_file', label: 'Upload Initial Photo (Optional)', type: 'file' },
+    { key: 'photo_caption', label: 'Initial Photo Caption (Optional)', type: 'text' },
+  ];
+
+  app.get('/admin/gallery/new', (req, res) => {
+    res.send(layout({
+      title: 'New Gallery Event', authed: true,
+      body: `<h1>New Gallery Event</h1><div class="card">${renderForm({
+        fields: NEW_GALLERY_EVENT_FIELDS, action: '/admin/gallery/new', submitLabel: 'Create',
+      })}</div>`,
+    }));
+  });
+
+  app.post('/admin/gallery/new', upload.single('photo_file'), async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+      const rows = await sql(
+        `INSERT INTO gallery_events (sort_order, title, year, category, venue, date) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [order, req.body.title || '', req.body.year || '', req.body.category || '', req.body.venue || '', req.body.date || '']
+      );
+
+      const eventId = rows[0].id;
+
+      if (req.file) {
+        const b64 = req.file.buffer.toString('base64');
+        const dataUri = `data:${req.file.mimetype};base64,${b64}`;
+        await sql(
+          `INSERT INTO gallery_photos (event_id, sort_order, src, caption) VALUES ($1, 0, $2, $3)`,
+          [eventId, dataUri, req.body.photo_caption || '']
+        );
+      }
+
+      res.redirect('/admin/gallery');
+    } catch (err) { next(err); }
+  });
+
+  const EDIT_GALLERY_EVENT_FIELDS = [
+    { key: 'title', label: 'Title', type: 'text' },
+    { key: 'year', label: 'Year', type: 'text' },
+    { key: 'category', label: 'Category (Optional)', type: 'text' },
+    { key: 'venue', label: 'Venue (Optional)', type: 'text' },
+    { key: 'date', label: 'Date (Optional)', type: 'text' },
+    { key: 'photo_file', label: 'Upload an additional Photo (Optional)', type: 'file' },
+    { key: 'photo_caption', label: 'New Photo Caption (Optional)', type: 'text' },
+  ];
+
+  app.get('/admin/gallery/:id/edit', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const [row] = await sql(`SELECT * FROM gallery_events WHERE id = $1`, [req.params.id]);
+      if (!row) return res.status(404).send('Not found');
+      res.send(layout({
+        title: 'Edit Gallery Event', authed: true,
+        body: `<h1>Edit Gallery Event</h1><div class="card">${renderForm({
+          fields: EDIT_GALLERY_EVENT_FIELDS, row, action: `/admin/gallery/${req.params.id}/edit`, submitLabel: 'Save',
+        })}</div>`,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/edit', upload.single('photo_file'), async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+      await sql(
+        `UPDATE gallery_events SET sort_order = $1, title = $2, year = $3, category = $4, venue = $5, date = $6 WHERE id = $7`,
+        [order, req.body.title || '', req.body.year || '', req.body.category || '', req.body.venue || '', req.body.date || '', req.params.id]
+      );
+
+      if (req.file) {
+        const b64 = req.file.buffer.toString('base64');
+        const dataUri = `data:${req.file.mimetype};base64,${b64}`;
+        await sql(
+          `INSERT INTO gallery_photos (event_id, sort_order, src, caption) VALUES ($1, 0, $2, $3)`,
+          [req.params.id, dataUri, req.body.photo_caption || '']
+        );
+      }
+
+      res.redirect('/admin/gallery');
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/delete', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await sql(`DELETE FROM gallery_events WHERE id = $1`, [req.params.id]);
+      res.redirect('/admin/gallery');
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/gallery/:id/reorder', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      const order = Number(req.body.order) || 0;
+      await sql(`UPDATE gallery_events SET sort_order = $1 WHERE id = $2`, [order, req.params.id]);
+      res.redirect('/admin/gallery');
+    } catch (err) { next(err); }
+  });
+
+  // --- Contact messages admin routes ---
+  app.get('/admin/contact-messages', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await ensureTables(sql);
+      const rows = await sql`SELECT * FROM contact_messages ORDER BY created_at DESC, id DESC`;
+
+      const listHtml = rows.length ? rows.map(r => `
+        <div class="card" style="margin-bottom:16px; padding:20px; border-radius:12px; border:1px solid var(--border); ${r.read ? 'opacity:0.8;' : 'border-left:4px solid #f59e0b;'}">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+            <div>
+              <strong style="font-size:17px; color:var(--text-main);">${esc(r.name)}</strong>
+              <span style="color:var(--text-muted); font-size:14px; margin-left:8px;">&lt;<a href="mailto:${esc(r.email)}" style="color:var(--accent);">${esc(r.email)}</a>&gt;</span>
+              ${r.read ? '<span style="margin-left:8px; font-size:12px; background:#e2e8f0; color:#475569; padding:2px 8px; border-radius:12px;">Read</span>' : '<span style="margin-left:8px; font-size:12px; background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:12px; font-weight:600;">New</span>'}
+            </div>
+            <div style="font-size:13px; color:var(--text-muted);">
+              ${r.created_at ? new Date(r.created_at).toLocaleString() : ''}
+            </div>
+          </div>
+          ${r.subject ? `<div style="font-weight:600; font-size:15px; margin-bottom:8px; color:var(--text-main);">Subject: ${esc(r.subject)}</div>` : ''}
+          <div style="white-space:pre-wrap; line-height:1.6; color:var(--text-main); background:rgba(0,0,0,0.02); padding:14px; border-radius:8px; font-size:14px; margin-bottom:12px;">${esc(r.message)}</div>
+          <div style="display:flex; gap:10px; justify-content:flex-end;">
+            <a href="mailto:${esc(r.email)}?subject=${encodeURIComponent('Re: ' + (r.subject || 'Inquiry'))}" class="btn" style="padding:6px 14px; font-size:13px; text-decoration:none;">Reply via Email</a>
+            <form method="POST" action="/admin/contact-messages/${r.id}/delete" onsubmit="return confirm('Delete this message?');" style="display:inline;">
+              <button type="submit" class="btn" style="padding:6px 14px; font-size:13px; background:#fee2e2; color:#b91c1c; border:none; border-radius:6px; cursor:pointer;">Delete</button>
+            </form>
+          </div>
+        </div>
+      `).join('') : '<div class="card" style="padding:32px; text-align:center; color:var(--text-muted);">No messages received yet.</div>';
+
+      res.send(layout({
+        title: 'Contact Messages', authed: true,
+        body: `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+            <div>
+              <h1 style="font-size:32px; font-weight:800; letter-spacing:-0.03em; margin:0 0 4px;">Contact Messages</h1>
+              <p class="muted" style="margin:0;">Inquiries submitted through the portfolio contact form.</p>
+            </div>
+            <a href="/admin" class="btn secondary" style="font-size:13px;">&larr; Back to Dashboard</a>
+          </div>
+          ${listHtml}
+        `,
+      }));
+    } catch (err) { next(err); }
+  });
+
+  app.post('/admin/contact-messages/:id/delete', async (req, res, next) => {
+    try {
+      const sql = getSql();
+      await sql(`DELETE FROM contact_messages WHERE id = $1`, [req.params.id]);
+      res.redirect('/admin/contact-messages');
+    } catch (err) { next(err); }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  app.use((req, res) => res.status(404).json({ detail: 'Not found.' }));
+
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    console.error(err);
+    if (req.path.startsWith('/api/')) {
+      return res.status(500).json({ detail: 'Server error.' });
+    }
+    res.status(500).send(layout({
+      title: 'Error', authed: auth.isAuthenticated(req),
+      body: `<h1>Something went wrong</h1><p class="muted">${esc(err.message)}</p>`,
+    }));
+  });
+
+  return app;
+}
+
+function extractValues(fields, body) {
+  const out = {};
+  for (const f of fields) {
+    if (f.type === 'checkbox') {
+      out[f.key] = body[f.key] === 'on';
+    } else {
+      out[f.key] = body[f.key] || '';
+    }
+  }
+  return out;
+}
+
+const PHOTO_FIELDS = [
+  { key: 'src', label: 'Image URL/Path (Overrides upload)', type: 'text' },
+  { key: 'photo_file', label: 'Upload Photo (leaves existing if empty)', type: 'file' },
+  { key: 'caption', label: 'Caption', type: 'text' },
+];
+
+const GALLERY_EVENT_FIELDS = [
+  { key: 'title', label: 'Title', type: 'text' },
+  { key: 'year', label: 'Year', type: 'text' },
+  { key: 'category', label: 'Category', type: 'text' },
+  { key: 'venue', label: 'Venue', type: 'text' },
+  { key: 'date', label: 'Date', type: 'text' },
+];
+
+const SETTINGS_FIELDS = [
+  { key: 'name', label: 'Name', type: 'text', group: 'Profile & Contact' },
+  { key: 'title', label: 'Headline / Title', type: 'text', group: 'Profile & Contact' },
+  { key: 'email', label: 'Email', type: 'text', group: 'Profile & Contact' },
+  { key: 'phone', label: 'Phone', type: 'text', group: 'Profile & Contact' },
+  { key: 'location', label: 'Location', type: 'text', group: 'Profile & Contact' },
+  { key: 'avatar_file', label: 'Browse / Upload Profile Avatar Photo (JPG, PNG, WebP)', type: 'file', group: 'Profile & Contact' },
+  { key: 'avatar', label: 'Or Avatar Image URL (If not browsing a file)', type: 'text', group: 'Profile & Contact' },
+  { key: 'hero_status_text', label: 'Hero Avatar Status Button Text (e.g. Open to research)', type: 'text', group: 'Profile & Contact' },
+  { key: 'objective', label: 'About Me Bio / Objective (Short summary for CV / Profile cards)', type: 'textarea', group: 'Profile & Contact' },
+  { key: 'stat_publications', label: 'Stat: Publications', type: 'number', group: 'Statistics' },
+  { key: 'stat_projects', label: 'Stat: Projects', type: 'number', group: 'Statistics' },
+  { key: 'stat_awards', label: 'Stat: Awards', type: 'number', group: 'Statistics' },
+  { key: 'stat_certifications', label: 'Stat: Certifications', type: 'number', group: 'Statistics' },
+  { key: 'social_github', label: 'GitHub URL', type: 'text', group: 'Social Links' },
+  { key: 'social_linkedin', label: 'LinkedIn URL', type: 'text', group: 'Social Links' },
+  { key: 'social_researchgate', label: 'ResearchGate URL', type: 'text', group: 'Social Links' },
+  { key: 'social_scholar', label: 'Google Scholar URL', type: 'text', group: 'Social Links' },
+  { key: 'social_orcid', label: 'ORCID URL', type: 'text', group: 'Social Links' },
+  { key: 'social_x', label: 'X (Twitter) URL', type: 'text', group: 'Social Links' },
+  { key: 'skills_languages', label: 'Skills: Languages (comma separated)', type: 'text', group: 'Skills' },
+  { key: 'skills_frameworks', label: 'Skills: Frameworks (comma separated)', type: 'text', group: 'Skills' },
+  { key: 'skills_tools', label: 'Skills: Tools (comma separated)', type: 'text', group: 'Skills' },
+  { key: 'skills_research_methods', label: 'Skills: Research Methods (comma separated)', type: 'text', group: 'Skills' },
+  { key: 'father_name', label: "Father's Name", type: 'text', group: 'Personal Info' },
+  { key: 'mother_name', label: "Mother's Name", type: 'text', group: 'Personal Info' },
+  { key: 'dob', label: 'Date of Birth', type: 'text', group: 'Personal Info' },
+  { key: 'religion', label: 'Religion', type: 'text', group: 'Personal Info' },
+  { key: 'nid', label: 'NID', type: 'text', group: 'Personal Info' },
+  { key: 'marital_status', label: 'Marital Status', type: 'text', group: 'Personal Info' },
+  { key: 'blood_group', label: 'Blood Group', type: 'text', group: 'Personal Info' },
+  { key: 'nationality', label: 'Nationality', type: 'text', group: 'Personal Info' },
+  { key: 'address', label: 'Address', type: 'textarea', group: 'Personal Info' },
+  { key: 'teaching_philosophy', label: 'Teaching Philosophy', type: 'textarea', group: 'Other Settings' },
+  { key: 'teaching_mentoring_text', label: 'Mentoring Text', type: 'textarea', group: 'Other Settings' },
+  { key: 'footer_text', label: 'Footer Text', type: 'text', group: 'Other Settings' },
+  { key: 'cv_last_updated', label: 'CV Last Updated', type: 'text', group: 'Other Settings' },
+  { key: 'cv_download_url', label: 'CV Download URL', type: 'text', group: 'Other Settings' },
+];
+
+module.exports = { buildApp };
