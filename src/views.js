@@ -1,4 +1,4 @@
-function esc(value) {
+﻿function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
     .replace(/&/g, '&amp;')
@@ -628,7 +628,7 @@ function layout({ title, authed, body, flash }) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${esc(title)} · Portfolio Admin</title>
+<title>${esc(title)} Â· Portfolio Admin</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>${STYLE}</style>
 <script>
@@ -862,7 +862,7 @@ ${authed ? `
   </div>
   
   <div class="sidebar-footer">
-    <a href="https://rashelmahmudrabbi.github.io/" target="_blank" class="btn secondary" style="font-size:12.5px; justify-content:flex-start; width:100%;">
+    <a href="https://rashelmahmudrabbi.github.io/port..frontend/" target="_blank" class="btn secondary" style="font-size:12.5px; justify-content:flex-start; width:100%;">
       <i class="bi bi-box-arrow-up-right"></i> Live Portfolio
     </a>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
@@ -888,7 +888,7 @@ ${authed ? `
       <span class="role-badge">Administrator</span>
     </div>
     <div style="display:flex; align-items:center; gap:14px;">
-      ${authed ? `<a href="https://rashelmahmudrabbi.github.io/" target="_blank" class="btn secondary" style="padding:6px 12px; font-size:12.5px;"><i class="bi bi-box-arrow-up-right"></i> Preview Site</a>` : ''}
+      ${authed ? `<a href="https://rashelmahmudrabbi.github.io/port..frontend/" target="_blank" class="btn secondary" style="padding:6px 12px; font-size:12.5px;"><i class="bi bi-box-arrow-up-right"></i> Preview Site</a>` : ''}
       <button class="theme-toggle-btn" onclick="toggleAdminTheme()" title="Toggle Dark/Light Mode">
         <i id="adminThemeIcon" class="bi bi-moon-stars-fill"></i>
       </button>
@@ -1012,7 +1012,7 @@ function fieldInput(field, value) {
   }
   if (field.type === 'file') {
     return `
-      ${v ? `<div style="margin-bottom:8px;"><img src="${esc(String(v).startsWith('media/') ? 'https://rashelmahmudrabbi.github.io/' + v : v).replace(/ /g, '%20')}" style="max-height:80px; max-width:120px; object-fit:cover; border-radius:6px; border:1px solid var(--border); display:block; margin-bottom:4px;" /><small class="muted">Current image: <code>${esc(truncate(v, 40))}</code></small></div>` : ''}
+      ${v ? `<div style="margin-bottom:8px;"><img src="${esc(String(v).startsWith('media/') ? 'https://rashelmahmudrabbi.github.io/port..frontend/' + v : v).replace(/ /g, '%20')}" style="max-height:80px; max-width:120px; object-fit:cover; border-radius:6px; border:1px solid var(--border); display:block; margin-bottom:4px;" /><small class="muted">Current image: <code>${esc(truncate(v, 40))}</code></small></div>` : ''}
       <input type="file" name="${esc(field.key)}" accept="image/*" style="display:block; padding:8px; border:1px solid var(--border); border-radius:6px; width:100%; background:var(--surface-2);" />
     `;
   }
@@ -1108,7 +1108,7 @@ function renderTable({ resourceKey, label, fields, rows, extraCol }) {
 
 function truncate(v, n) {
   const s = v === null || v === undefined ? '' : String(v);
-  return s.length > n ? s.slice(0, n) + '…' : s;
+  return s.length > n ? s.slice(0, n) + 'â€¦' : s;
 }
 
 function renderCvAdmin(currentUrl) {
@@ -1154,7 +1154,7 @@ function renderAboutAdmin({ settings = {}, pills = [] }) {
       <h1 style="margin:0 0 4px 0;">About Section Manager</h1>
       <p class="muted" style="margin:0;">Control your headline, status badge, rich text paragraphs, and metadata pills in one place.</p>
     </div>
-    <a href="https://rashelmahmudrabbi.github.io/#objective" target="_blank" class="btn secondary" style="font-size:13px;">
+    <a href="https://rashelmahmudrabbi.github.io/port..frontend/#objective" target="_blank" class="btn secondary" style="font-size:13px;">
       <i class="bi bi-box-arrow-up-right"></i> View on Live Site
     </a>
   </div>

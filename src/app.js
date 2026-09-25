@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
@@ -36,7 +36,7 @@ async function ensureTables(sql) {
 }
 
 // Resources that get a generic, auto-generated admin CRUD screen. Gallery
-// events also live here (title/year only) — their nested photos get their
+// events also live here (title/year only) â€” their nested photos get their
 // own dedicated admin routes further down. Settings is a singleton and
 // handled entirely separately.
 const ADMIN_RESOURCE_KEYS = [
@@ -59,7 +59,7 @@ function buildApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false }));
 
-  // ── Security headers ─────────────────────────────────────────────────
+  // â”€â”€ Security headers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -87,7 +87,7 @@ function buildApp() {
     },
   }));
 
-  // ── Simple in-memory rate limiter for /api/* ──────────────────────────
+  // â”€â”€ Simple in-memory rate limiter for /api/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const rateLimitMap = new Map();
   const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
   const RATE_LIMIT_MAX = 120; // max requests per window per IP
@@ -113,7 +113,7 @@ function buildApp() {
     }
   }, 5 * 60 * 1000).unref();
 
-  // ── Cache-Control for all GET /api/* responses ───────────────────────
+  // â”€â”€ Cache-Control for all GET /api/* responses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   app.use('/api', (req, res, next) => {
     if (req.method === 'GET') {
       res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=86400');
@@ -121,10 +121,10 @@ function buildApp() {
     next();
   });
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Public, read-only API — same paths and JSON shapes the frontend
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Public, read-only API â€” same paths and JSON shapes the frontend
   // already calls (see portfolio-frontend/assets/js/api.js).
-  // ─────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   app.get('/', (req, res) => {
     res.json({
@@ -231,7 +231,7 @@ function buildApp() {
     } catch (err) { next(err); }
   });
 
-  // ── Combined /api/portfolio endpoint ──────────────────────────────────
+  // â”€â”€ Combined /api/portfolio endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Returns ALL homepage data in a single response, cutting round-trips
   // from 10+ to 1 and making the page load significantly faster.
   app.get('/api/portfolio', async (req, res, next) => {
@@ -502,9 +502,9 @@ function buildApp() {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Admin panel — session-cookie protected, server-rendered HTML forms.
-  // ─────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Admin panel â€” session-cookie protected, server-rendered HTML forms.
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   app.get('/admin/login', (req, res) => {
     if (auth.isAuthenticated(req)) return res.redirect('/admin');
@@ -740,7 +740,7 @@ function buildApp() {
         title: 'Dashboard', authed: true,
         body: `<div style="margin-top:32px; margin-bottom:16px;">
             <h1 style="font-size:36px; font-weight:800; letter-spacing:-0.04em;">Dashboard</h1>
-            <p class="muted" style="font-size:16px;">Edits here appear on the live site immediately — no redeploy needed.</p>
+            <p class="muted" style="font-size:16px;">Edits here appear on the live site immediately â€” no redeploy needed.</p>
           </div>
           ${groupsHtml}
           <div style="height:64px;"></div>`,
@@ -913,7 +913,7 @@ function buildApp() {
       );
       const rows = photos
         .map((p) => `<tr>
-          <td style="width: 60px;"><img src="${esc(p.src.startsWith('media/') ? 'https://rashelmahmudrabbi.github.io/' + p.src : p.src).replace(/ /g, '%20')}" alt="Thumbnail" style="height: 48px; width: 48px; object-fit: cover; border-radius: 4px; display: block; background: var(--surface-2);" /></td>
+          <td style="width: 60px;"><img src="${esc(p.src.startsWith('media/') ? 'https://rashelmahmudrabbi.github.io/port..frontend/' + p.src : p.src).replace(/ /g, '%20')}" alt="Thumbnail" style="height: 48px; width: 48px; object-fit: cover; border-radius: 4px; display: block; background: var(--surface-2);" /></td>
           <td>${esc(p.caption)}</td>
           <td>
             <form method="post" action="/admin/gallery/${event.id}/photos/${p.id}/reorder" class="inline" style="margin:0;">
@@ -929,8 +929,8 @@ function buildApp() {
         </tr>`)
         .join('');
       res.send(layout({
-        title: `Photos — ${event.title}`, authed: true,
-        body: `<h1>Photos — ${esc(event.title)}</h1>
+        title: `Photos â€” ${event.title}`, authed: true,
+        body: `<h1>Photos â€” ${esc(event.title)}</h1>
           <p><a class="link" href="/admin/gallery">&larr; Back to Gallery</a></p>
           <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
@@ -953,7 +953,7 @@ function buildApp() {
       if (!event) return res.status(404).send('Not found');
       res.send(layout({
         title: 'New Photo', authed: true,
-        body: `<h1>New Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
+        body: `<h1>New Photo â€” ${esc(event.title)}</h1><div class="card">${renderForm({
           fields: PHOTO_FIELDS, action: `/admin/gallery/${event.id}/photos/new`, submitLabel: 'Create',
         })}</div>`,
       }));
@@ -985,7 +985,7 @@ function buildApp() {
       if (!event || !photo) return res.status(404).send('Not found');
       res.send(layout({
         title: 'Edit Photo', authed: true,
-        body: `<h1>Edit Photo — ${esc(event.title)}</h1><div class="card">${renderForm({
+        body: `<h1>Edit Photo â€” ${esc(event.title)}</h1><div class="card">${renderForm({
           fields: PHOTO_FIELDS, row: photo, action: `/admin/gallery/${event.id}/photos/${photo.id}/edit`, submitLabel: 'Save',
         })}</div>`,
       }));
@@ -1342,7 +1342,7 @@ function buildApp() {
     } catch (err) { next(err); }
   });
 
-  // ─────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   app.use((req, res) => res.status(404).json({ detail: 'Not found.' }));
 
   // eslint-disable-next-line no-unused-vars
