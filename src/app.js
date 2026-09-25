@@ -543,39 +543,39 @@ function buildApp() {
       const username = (req.body.username || '').trim();
       const password = (req.body.password || '').trim();
 
+      const expectedUser = (process.env.ADMIN_USERNAME || '').trim();
+      const expectedPass = (process.env.ADMIN_PASSWORD || '').trim();
+
+      // 1. Direct environment variable check for instant, guaranteed login
+      if (expectedUser && expectedPass) {
+        if (auth.safeStringEqual(username, expectedUser) && auth.safeStringEqual(password, expectedPass)) {
+          res.setHeader('Set-Cookie', auth.createSessionCookie());
+          return res.redirect('/admin');
+        }
+      }
+
+      // 2. Database credentials check fallback
       let sql = null;
       try {
         sql = getSql();
       } catch (err) {
-        console.warn('DB initialization error during login:', err.message);
+        console.warn('DB initialization notice during login:', err.message);
       }
 
       if (sql) {
         try {
-          await ensureTables(sql);
-          await sql(`CREATE TABLE IF NOT EXISTS admin_users (
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
-          )`);
-          const adminCount = await sql`SELECT count(*) FROM admin_users`;
-          if (!adminCount || Number(adminCount[0]?.count) === 0) {
-            const expectedUser = (process.env.ADMIN_USERNAME || '').trim();
-            const expectedPass = (process.env.ADMIN_PASSWORD || '').trim();
-            if (expectedUser && expectedPass) {
-              const hash = auth.hashPassword(expectedPass);
-              await sql`INSERT INTO admin_users (id, username, password_hash) VALUES (1, ${expectedUser}, ${hash}) ON CONFLICT DO NOTHING`;
-            }
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DB Timeout')), 3000));
+          const credsPromise = auth.checkCredentials(sql, username, password);
+          const valid = await Promise.race([credsPromise, timeoutPromise]);
+          if (valid) {
+            res.setHeader('Set-Cookie', auth.createSessionCookie());
+            return res.redirect('/admin');
           }
         } catch (dbErr) {
-          console.warn('DB table ensure notice during login:', dbErr.message);
+          console.warn('DB check during login notice:', dbErr.message);
         }
       }
 
-      if (await auth.checkCredentials(sql, username, password)) {
-        res.setHeader('Set-Cookie', auth.createSessionCookie());
-        return res.redirect('/admin');
-      }
       res.redirect('/admin/login?error=1');
     } catch (err) {
       console.error('Login error:', err);
