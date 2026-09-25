@@ -1,4 +1,4 @@
-﻿function esc(value) {
+function esc(value) {
   if (value === null || value === undefined) return '';
   return String(value)
     .replace(/&/g, '&amp;')
@@ -861,6 +861,11 @@ ${authed ? `
       <a href="/admin/teaching-roles"><i class="bi bi-person-badge"></i> Teaching Roles</a>
       <a href="/admin/courses"><i class="bi bi-mortarboard"></i> Courses &amp; Workshops</a>
       <a href="/admin/teaching-areas"><i class="bi bi-book-half"></i> Teaching Areas</a>
+    </details>
+
+    <details class="sidebar-category-details">
+      <summary class="sidebar-category">Inquiries <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/contact-messages"><i class="bi bi-envelope-paper-fill"></i> Contact Messages</a>
     </details>
   </div>
   

@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
@@ -1307,9 +1307,9 @@ function buildApp() {
           ${r.subject ? `<div style="font-weight:600; font-size:15px; margin-bottom:8px; color:var(--text-main);">Subject: ${esc(r.subject)}</div>` : ''}
           <div style="white-space:pre-wrap; line-height:1.6; color:var(--text-main); background:rgba(0,0,0,0.02); padding:14px; border-radius:8px; font-size:14px; margin-bottom:12px;">${esc(r.message)}</div>
           <div style="display:flex; gap:10px; justify-content:flex-end;">
-            <a href="mailto:${esc(r.email)}?subject=${encodeURIComponent('Re: ' + (r.subject || 'Inquiry'))}" class="btn" style="padding:6px 14px; font-size:13px; text-decoration:none;">Reply via Email</a>
-            <form method="POST" action="/admin/contact-messages/${r.id}/delete" onsubmit="return confirm('Delete this message?');" style="display:inline;">
-              <button type="submit" class="btn" style="padding:6px 14px; font-size:13px; background:#fee2e2; color:#b91c1c; border:none; border-radius:6px; cursor:pointer;">Delete</button>
+            <a href="mailto:${esc(r.email)}?subject=${encodeURIComponent('Re: ' + (r.subject || 'Inquiry'))}" class="btn" style="padding:6px 14px; font-size:13px; text-decoration:none;"><i class="bi bi-reply-fill"></i> Reply via Email</a>
+            <form method="POST" action="/admin/contact-messages/${r.id}/delete" onsubmit="return confirm('Delete this message permanently?');" style="display:inline; margin:0;">
+              <button type="submit" class="btn danger" style="padding:6px 14px; font-size:13px;"><i class="bi bi-trash3-fill"></i> Delete</button>
             </form>
           </div>
         </div>
@@ -1334,7 +1334,12 @@ function buildApp() {
   app.post('/admin/contact-messages/:id/delete', async (req, res, next) => {
     try {
       const sql = getSql();
-      await sql(`DELETE FROM contact_messages WHERE id = $1`, [req.params.id]);
+      const messageId = parseInt(req.params.id, 10);
+      if (isNaN(messageId)) {
+        await sql(`DELETE FROM contact_messages WHERE id = $1`, [req.params.id]);
+      } else {
+        await sql(`DELETE FROM contact_messages WHERE id = $1`, [messageId]);
+      }
       res.redirect('/admin/contact-messages');
     } catch (err) { next(err); }
   });
