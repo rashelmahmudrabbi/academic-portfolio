@@ -11,28 +11,24 @@ const { layout, renderForm, renderTable, esc, renderCvAdmin, renderAboutAdmin } 
 let tablesEnsured = false;
 async function ensureTables(sql) {
   if (tablesEnsured) return;
+  tablesEnsured = true;
   try {
+    const check = await sql("SELECT 1 FROM information_schema.tables WHERE table_name = 'admin_users' LIMIT 1");
+    if (check && check.length > 0) return;
+
     const fs = require('fs');
     const path = require('path');
     const schemaPath = path.join(__dirname, 'schema.sql');
     if (fs.existsSync(schemaPath)) {
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-      const statements = schemaSql
-        .split(';')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const statements = schemaSql.split(';').map((s) => s.trim()).filter(Boolean);
       for (const stmt of statements) {
-        try {
-          await sql(stmt);
-        } catch (e) {
-          // ignore existing table or constraint errors
-        }
+        try { await sql(stmt); } catch (e) {}
       }
     }
   } catch (e) {
     console.error('Schema auto-migration notice:', e.message);
   }
-  tablesEnsured = true;
 }
 
 // Resources that get a generic, auto-generated admin CRUD screen. Gallery
@@ -703,18 +699,19 @@ function buildApp() {
       await ensureTables(sql);
       const counts = {};
 
-      await Promise.all(
-        DASHBOARD_GROUPS.flatMap(g => g.items).map(async (item) => {
-          if (item.table) {
-            try {
-              const result = await sql(`SELECT count(*) as count FROM ${item.table} ${item.where ? 'WHERE ' + item.where : ''}`);
-              counts[item.key] = result && result[0] ? result[0].count : 0;
-            } catch (e) {
-              counts[item.key] = 0;
-            }
+      const tableItems = DASHBOARD_GROUPS.flatMap(g => g.items).filter(item => item.table);
+      if (tableItems.length > 0) {
+        try {
+          const unionQuery = tableItems.map(item => "SELECT '" + item.key + "' AS k, count(*) AS c FROM " + item.table + (item.where ? ' WHERE ' + item.where : '')).join(' UNION ALL ');
+          const rows = await sql(unionQuery);
+          for (const r of rows) {
+            counts[r.k] = parseInt(r.c, 10) || 0;
           }
-        })
-      );
+        } catch (e) {
+          console.warn('Dashboard batch count query notice:', e.message);
+          for (const item of tableItems) { counts[item.key] = 0; }
+        }
+      }
 
       let groupsHtml = '';
       for (const group of DASHBOARD_GROUPS) {
