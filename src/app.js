@@ -540,27 +540,35 @@ function buildApp() {
 
   app.post('/admin/login', async (req, res, next) => {
     try {
-      const { username, password } = req.body;
-      const sql = getSql();
-      await ensureTables(sql);
+      const username = (req.body.username || '').trim();
+      const password = (req.body.password || '').trim();
 
-      // Ensure admin_users table exists
-      await sql(`CREATE TABLE IF NOT EXISTS admin_users (
-        id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL
-      )`);
+      let sql = null;
+      try {
+        sql = getSql();
+      } catch (err) {
+        console.warn('DB initialization error during login:', err.message);
+      }
 
-      // Seed admin_users table if empty
-      const adminCount = await sql`SELECT count(*) FROM admin_users`;
-      if (!adminCount || Number(adminCount[0]?.count) === 0) {
-        const expectedUser = process.env.ADMIN_USERNAME;
-        const expectedPass = process.env.ADMIN_PASSWORD;
-        if (expectedUser && expectedPass) {
-          const hash = auth.hashPassword(expectedPass);
-          await sql`INSERT INTO admin_users (id, username, password_hash) VALUES (1, ${expectedUser}, ${hash}) ON CONFLICT DO NOTHING`;
-        } else {
-          console.warn('ADMIN SEED: ADMIN_USERNAME or ADMIN_PASSWORD env vars not set. Skipping admin user creation.');
+      if (sql) {
+        try {
+          await ensureTables(sql);
+          await sql(`CREATE TABLE IF NOT EXISTS admin_users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+          )`);
+          const adminCount = await sql`SELECT count(*) FROM admin_users`;
+          if (!adminCount || Number(adminCount[0]?.count) === 0) {
+            const expectedUser = (process.env.ADMIN_USERNAME || '').trim();
+            const expectedPass = (process.env.ADMIN_PASSWORD || '').trim();
+            if (expectedUser && expectedPass) {
+              const hash = auth.hashPassword(expectedPass);
+              await sql`INSERT INTO admin_users (id, username, password_hash) VALUES (1, ${expectedUser}, ${hash}) ON CONFLICT DO NOTHING`;
+            }
+          }
+        } catch (dbErr) {
+          console.warn('DB table ensure notice during login:', dbErr.message);
         }
       }
 

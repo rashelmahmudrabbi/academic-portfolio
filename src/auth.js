@@ -44,24 +44,29 @@ function verifyPassword(password, storedHash) {
 }
 
 async function checkCredentials(sql, username, password) {
-  if (!username || !password) return false;
-  try {
-    const rows = await sql`SELECT * FROM admin_users WHERE username = ${username} LIMIT 1`;
-    if (rows.length > 0 && verifyPassword(password, rows[0].password_hash)) {
-      return true;
+  const user = (username || '').trim();
+  const pass = (password || '').trim();
+  if (!user || !pass) return false;
+
+  if (sql) {
+    try {
+      const rows = await sql`SELECT * FROM admin_users WHERE username = ${user} LIMIT 1`;
+      if (rows && rows.length > 0 && verifyPassword(pass, rows[0].password_hash)) {
+        return true;
+      }
+    } catch (e) {
+      console.warn('Credentials check DB notice:', e.message);
     }
-  } catch (e) {
-    console.error('Credentials check DB error:', e);
   }
   
   // Fallback to environment variables (only if both are explicitly set)
-  const expectedUser = process.env.ADMIN_USERNAME;
-  const expectedPass = process.env.ADMIN_PASSWORD;
+  const expectedUser = (process.env.ADMIN_USERNAME || '').trim();
+  const expectedPass = (process.env.ADMIN_PASSWORD || '').trim();
   if (!expectedUser || !expectedPass) {
     console.warn('AUTH: ADMIN_USERNAME or ADMIN_PASSWORD env vars are not set. Env-var fallback login disabled.');
     return false;
   }
-  if (safeStringEqual(username, expectedUser) && safeStringEqual(password, expectedPass)) {
+  if (safeStringEqual(user, expectedUser) && safeStringEqual(pass, expectedPass)) {
     return true;
   }
   return false;
