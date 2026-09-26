@@ -380,7 +380,8 @@ function buildApp() {
           (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM research_interests ORDER BY sort_order ASC, id ASC) t) AS "interests",
           (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM spoken_languages ORDER BY sort_order ASC, id ASC) t) AS "langs",
           (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_roles ORDER BY sort_order ASC, id ASC) t) AS "roles",
-          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_areas ORDER BY sort_order ASC, id ASC) t) AS "areas"
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM teaching_areas ORDER BY sort_order ASC, id ASC) t) AS "areas",
+          (SELECT COALESCE(json_agg(t), '[]'::json) FROM (SELECT * FROM about_pills ORDER BY sort_order ASC, id ASC) t) AS "pillRows"
       `;
       const settingsRow = allData.settingsRow || [];
       const s = settingsRow[0] || {};
@@ -388,8 +389,22 @@ function buildApp() {
       const langs = allData.langs || [];
       const roles = allData.roles || [];
       const areas = allData.areas || [];
+      const pillRows = allData.pillRows || [];
 
       res.json({
+        about: {
+          kicker: s.about_kicker || 'ABOUT ME',
+          headline: s.about_headline || 'AI research with a practical mindset.',
+          text: s.about_text || '',
+          research_statement_text: s.research_statement_text || '',
+          statusText: s.about_status_text || 'Open to research opportunities',
+          pills: pillRows && pillRows.length > 0 ? pillRows.map(p => ({
+            id: p.id,
+            label: p.label,
+            icon: p.icon || 'bi-cpu',
+            colorType: p.color_type || 'primary'
+          })) : [],
+        },
         profile: {
           name: s.name || '',
           title: s.title || '',
