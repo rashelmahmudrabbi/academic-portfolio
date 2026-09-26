@@ -109,34 +109,70 @@ const STYLE = `
   }
   .sidebar-brand:hover { color: var(--primary); }
   
+  .sidebar-search-box {
+    padding: 12px 14px 6px;
+    position: relative;
+  }
+  .sidebar-search-input {
+    width: 100%;
+    padding: 8px 12px 8px 32px;
+    font-size: 12.5px;
+    border-radius: 8px;
+    border: 1px solid var(--sidebar-border);
+    background: var(--surface-2);
+    color: var(--text-main);
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  .sidebar-search-input:focus {
+    border-color: var(--primary);
+    background: var(--card-bg);
+    box-shadow: 0 0 0 3px var(--primary-tint);
+  }
+  .sidebar-search-icon {
+    position: absolute;
+    left: 24px;
+    top: 50%;
+    transform: translateY(-20%);
+    font-size: 13px;
+    color: var(--sidebar-text-muted);
+    pointer-events: none;
+  }
+
   .sidebar-nav {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 12px;
+    padding: 8px 10px 16px;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--sidebar-border) transparent;
   }
+  .sidebar-nav::-webkit-scrollbar { width: 5px; }
+  .sidebar-nav::-webkit-scrollbar-thumb { background: var(--sidebar-border); border-radius: 4px; }
   
   .sidebar-category-details summary::-webkit-details-marker { display: none; }
-  .sidebar-category-details { margin-top: 6px; }
+  .sidebar-category-details { margin-top: 4px; }
   
   .sidebar-category {
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.8px;
     color: var(--sidebar-text-muted);
-    padding: 12px 12px 6px;
+    padding: 10px 10px 6px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: space-between;
     list-style: none;
     user-select: none;
+    border-radius: 6px;
+    transition: all 0.15s ease;
   }
   
-  .sidebar-category:hover { color: var(--primary); }
+  .sidebar-category:hover { color: var(--primary); background: rgba(47, 111, 237, 0.04); }
   
   .sidebar-category .toggle-icon {
     font-size: 10px;
@@ -150,21 +186,23 @@ const STYLE = `
   .sidebar-nav a {
     color: var(--sidebar-text);
     text-decoration: none;
-    font-size: 13.5px;
+    font-size: 13px;
     font-weight: 500;
-    padding: 9px 12px;
-    border-radius: 8px;
+    padding: 8px 10px;
+    border-radius: 7px;
     display: flex;
     align-items: center;
     gap: 10px;
     transition: all 0.15s ease;
+    position: relative;
   }
   .sidebar-nav a i {
-    font-size: 16px;
+    font-size: 15px;
     color: var(--sidebar-text-muted);
     width: 20px;
     text-align: center;
-    transition: color 0.15s ease;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
   }
   .sidebar-nav a:hover {
     background: var(--sidebar-hover);
@@ -172,14 +210,34 @@ const STYLE = `
   }
   .sidebar-nav a:hover i {
     color: var(--primary);
+    transform: scale(1.08);
   }
   .sidebar-nav a.active {
     background: var(--sidebar-active);
     color: #fff !important;
     font-weight: 600;
+    box-shadow: 0 2px 8px rgba(47, 111, 237, 0.25);
   }
   .sidebar-nav a.active i {
     color: #fff !important;
+  }
+  .sidebar-nav a .item-text {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sidebar-nav a .item-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--sidebar-text-muted);
+  }
+  .sidebar-nav a.active .item-badge {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
   }
   
   .sidebar-footer {
@@ -821,51 +879,60 @@ ${authed ? `
       <span>Admin Control</span>
     </a>
   </div>
+
+  <div class="sidebar-search-box">
+    <i class="bi bi-search sidebar-search-icon"></i>
+    <input type="text" id="sidebarSearch" class="sidebar-search-input" placeholder="Quick find section..." autocomplete="off" />
+  </div>
   
   <div class="sidebar-nav">
-    <details class="sidebar-category-details" open>
-      <summary class="sidebar-category">Overview <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin"><i class="bi bi-grid-fill"></i> Dashboard</a>
-      <a href="/admin/about"><i class="bi bi-person-lines-fill"></i> About Section &amp; Pills</a>
-      <a href="/admin/spotlights"><i class="bi bi-stars"></i> Spotlight Highlights</a>
-      <a href="/admin/settings"><i class="bi bi-gear-fill"></i> Site Settings</a>
-      <a href="/admin/cv"><i class="bi bi-file-earmark-person-fill"></i> Manage CV</a>
+    <div style="margin-bottom: 2px;">
+      <a href="/admin"><i class="bi bi-grid-1x2-fill"></i> <span class="item-text">Dashboard</span></a>
+    </div>
+
+    <!-- 1. CORE & IDENTITY -->
+    <details class="sidebar-category-details" id="nav_core" open>
+      <summary class="sidebar-category">Identity &amp; Profile <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/about"><i class="bi bi-person-badge-fill"></i> <span class="item-text">About &amp; Quick Bio</span></a>
+      <a href="/admin/spotlights"><i class="bi bi-stars"></i> <span class="item-text">Spotlight Cards</span></a>
+      <a href="/admin/cv"><i class="bi bi-file-earmark-person-fill"></i> <span class="item-text">CV &amp; Resume</span></a>
+      <a href="/admin/settings"><i class="bi bi-sliders2"></i> <span class="item-text">Site Settings &amp; SEO</span></a>
     </details>
     
-    <details class="sidebar-category-details" open>
-      <summary class="sidebar-category">Academic & Research <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin/publications"><i class="bi bi-journal-text"></i> Publications</a>
-      <a href="/admin/research-interests"><i class="bi bi-lightbulb-fill"></i> Research Interests</a>
-      <a href="/admin/education"><i class="bi bi-mortarboard-fill"></i> Education</a>
-      <a href="/admin/experience"><i class="bi bi-briefcase-fill"></i> Experience</a>
-      <a href="/admin/references"><i class="bi bi-person-lines-fill"></i> References</a>
+    <!-- 2. ACADEMIC & RESEARCH -->
+    <details class="sidebar-category-details" id="nav_academic" open>
+      <summary class="sidebar-category">Academic &amp; Research <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/publications"><i class="bi bi-journal-bookmark-fill"></i> <span class="item-text">Publications</span></a>
+      <a href="/admin/research-interests"><i class="bi bi-lightbulb-fill"></i> <span class="item-text">Research Interests</span></a>
+      <a href="/admin/education"><i class="bi bi-mortarboard-fill"></i> <span class="item-text">Education</span></a>
+      <a href="/admin/experience"><i class="bi bi-briefcase-fill"></i> <span class="item-text">Experience</span></a>
+      <a href="/admin/references"><i class="bi bi-person-check-fill"></i> <span class="item-text">References</span></a>
     </details>
     
-    <details class="sidebar-category-details">
-      <summary class="sidebar-category">Portfolio & Media <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin/projects"><i class="bi bi-kanban"></i> Projects</a>
-      <a href="/admin/gallery"><i class="bi bi-images"></i> Gallery</a>
-      <a href="/admin/blog"><i class="bi bi-pencil-square"></i> Blog Posts</a>
+    <!-- 3. PROJECTS & CONTENT -->
+    <details class="sidebar-category-details" id="nav_portfolio" open>
+      <summary class="sidebar-category">Portfolio &amp; Showcase <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/projects"><i class="bi bi-code-square"></i> <span class="item-text">Projects</span></a>
+      <a href="/admin/gallery"><i class="bi bi-images"></i> <span class="item-text">Photo Gallery</span></a>
+      <a href="/admin/blog"><i class="bi bi-pencil-square"></i> <span class="item-text">Blog &amp; Articles</span></a>
     </details>
     
-    <details class="sidebar-category-details">
-      <summary class="sidebar-category">Recognition & Skills <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin/awards"><i class="bi bi-trophy-fill"></i> Awards</a>
-      <a href="/admin/certifications"><i class="bi bi-patch-check-fill"></i> Certifications</a>
-      <a href="/admin/activities"><i class="bi bi-activity"></i> Activities</a>
-      <a href="/admin/spoken-languages"><i class="bi bi-translate"></i> Spoken Languages</a>
+    <!-- 4. CREDENTIALS & TEACHING -->
+    <details class="sidebar-category-details" id="nav_credentials" open>
+      <summary class="sidebar-category">Skills &amp; Teaching <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/awards"><i class="bi bi-trophy-fill"></i> <span class="item-text">Honors &amp; Awards</span></a>
+      <a href="/admin/certifications"><i class="bi bi-patch-check-fill"></i> <span class="item-text">Certifications</span></a>
+      <a href="/admin/activities"><i class="bi bi-lightning-charge-fill"></i> <span class="item-text">Activities &amp; Leadership</span></a>
+      <a href="/admin/spoken-languages"><i class="bi bi-translate"></i> <span class="item-text">Languages</span></a>
+      <a href="/admin/teaching-roles"><i class="bi bi-easel2-fill"></i> <span class="item-text">Teaching Roles</span></a>
+      <a href="/admin/courses"><i class="bi bi-mortarboard"></i> <span class="item-text">Courses &amp; Workshops</span></a>
+      <a href="/admin/teaching-areas"><i class="bi bi-book-half"></i> <span class="item-text">Teaching Areas</span></a>
     </details>
 
-    <details class="sidebar-category-details">
-      <summary class="sidebar-category">Teaching <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin/teaching-roles"><i class="bi bi-person-badge"></i> Teaching Roles</a>
-      <a href="/admin/courses"><i class="bi bi-mortarboard"></i> Courses &amp; Workshops</a>
-      <a href="/admin/teaching-areas"><i class="bi bi-book-half"></i> Teaching Areas</a>
-    </details>
-
-    <details class="sidebar-category-details">
-      <summary class="sidebar-category">Inquiries <i class="bi bi-chevron-down toggle-icon"></i></summary>
-      <a href="/admin/contact-messages"><i class="bi bi-envelope-paper-fill"></i> Contact Messages</a>
+    <!-- 5. INBOX & MESSAGES -->
+    <details class="sidebar-category-details" id="nav_inbox" open>
+      <summary class="sidebar-category">Communications <i class="bi bi-chevron-down toggle-icon"></i></summary>
+      <a href="/admin/contact-messages"><i class="bi bi-chat-left-dots-fill"></i> <span class="item-text">Contact Messages</span></a>
     </details>
   </div>
   
@@ -915,11 +982,75 @@ ${authed ? `
     const icon = document.getElementById('adminThemeIcon');
     if (icon) icon.className = isDark ? 'bi bi-sun-fill' : 'bi bi-moon-stars-fill';
     
-    // Highlight active link in sidebar
+    // Highlight active link in sidebar and ensure its parent group is open
     const currentPath = window.location.pathname;
     document.querySelectorAll('.sidebar-nav a').forEach(function(a) {
       if (a.getAttribute('href') === currentPath) {
         a.classList.add('active');
+        const parentDetails = a.closest('details.sidebar-category-details');
+        if (parentDetails) {
+          parentDetails.setAttribute('open', '');
+        }
+      }
+    });
+
+    // Real-time Sidebar Quick Filter Search
+    const searchInput = document.getElementById('sidebarSearch');
+    if (searchInput) {
+      searchInput.addEventListener('input', function() {
+        const query = (this.value || '').trim().toLowerCase();
+        const detailsEls = document.querySelectorAll('.sidebar-category-details');
+
+        if (!query) {
+          // Restore all
+          document.querySelectorAll('.sidebar-nav a').forEach(a => a.style.display = '');
+          detailsEls.forEach(d => {
+            d.style.display = '';
+            // restore saved or default open
+            const savedState = localStorage.getItem('sb_open_' + d.id);
+            if (savedState !== null) {
+              if (savedState === 'true') d.setAttribute('open', '');
+              else d.removeAttribute('open');
+            }
+          });
+          return;
+        }
+
+        // Filtering
+        detailsEls.forEach(detail => {
+          let hasMatchInGroup = false;
+          const links = detail.querySelectorAll('a');
+          links.forEach(a => {
+            const text = (a.textContent || '').toLowerCase();
+            if (text.includes(query)) {
+              a.style.display = '';
+              hasMatchInGroup = true;
+            } else {
+              a.style.display = 'none';
+            }
+          });
+
+          if (hasMatchInGroup) {
+            detail.style.display = '';
+            detail.setAttribute('open', '');
+          } else {
+            detail.style.display = 'none';
+          }
+        });
+      });
+    }
+
+    // Persist category accordion toggle states
+    document.querySelectorAll('.sidebar-category-details').forEach(function(d) {
+      if (d.id) {
+        const savedState = localStorage.getItem('sb_open_' + d.id);
+        if (savedState !== null) {
+          if (savedState === 'true') d.setAttribute('open', '');
+          else d.removeAttribute('open');
+        }
+        d.addEventListener('toggle', function() {
+          localStorage.setItem('sb_open_' + d.id, d.hasAttribute('open'));
+        });
       }
     });
 
