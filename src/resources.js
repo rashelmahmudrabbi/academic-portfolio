@@ -56,6 +56,7 @@ const RESOURCES = {
       { key: 'abstract', label: 'Abstract', type: 'textarea' },
       { key: 'doi_link', label: 'DOI link', type: 'text' },
       { key: 'pdf_link', label: 'PDF link', type: 'text' },
+      { key: 'featured', label: 'Featured on Homepage', type: 'checkbox' },
     ],
     serialize: (row) => ({
       id: row.id,
@@ -68,6 +69,7 @@ const RESOURCES = {
       abstract: row.abstract,
       doiLink: row.doi_link,
       pdfLink: row.pdf_link,
+      featured: row.featured,
       order: row.sort_order,
     }),
   },

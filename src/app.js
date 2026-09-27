@@ -12,7 +12,15 @@ let tablesEnsured = false;
 async function ensureTables(sql) {
   if (tablesEnsured) return;
   tablesEnsured = true;
-  try {
+    // Always run safe column additions so newly added columns are applied without manual DB manipulation
+    try {
+      await sql`ALTER TABLE publications ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT FALSE`;
+      await sql`ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS research_statement_text TEXT DEFAULT ''`;
+      await sql`ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS social_x TEXT DEFAULT ''`;
+    } catch (migErr) {
+      // ignore if already present or permission issue
+    }
+
     const check = await sql("SELECT 1 FROM information_schema.tables WHERE table_name = 'admin_users' LIMIT 1");
     if (check && check.length > 0) return;
 

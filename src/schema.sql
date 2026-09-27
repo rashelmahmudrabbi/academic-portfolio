@@ -141,7 +141,8 @@ CREATE TABLE IF NOT EXISTS publications (
   year TEXT DEFAULT '',
   abstract TEXT DEFAULT '',
   doi_link TEXT DEFAULT '',
-  pdf_link TEXT DEFAULT ''
+  pdf_link TEXT DEFAULT '',
+  featured BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -247,6 +248,7 @@ END $$;
 -- Add missing column if it doesn't exist (Postgres 11+)
 ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS research_statement_text TEXT DEFAULT '';
 ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS social_x TEXT DEFAULT '';
+ALTER TABLE publications ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS contact_messages (
   id SERIAL PRIMARY KEY,

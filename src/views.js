@@ -1211,7 +1211,12 @@ function renderTable({ resourceKey, label, fields, rows, extraCol }) {
   const body = rows
     .map((r) => {
       const cells = cols
-        .map((f) => `<td>${esc(truncate(r[f.key], 80))}</td>`)
+        .map((f) => {
+          if (f.type === 'checkbox') {
+            return `<td>${r[f.key] ? '<span class="badge" style="background:var(--success); color:#fff; font-size:11px; padding:2px 8px; border-radius:10px;">Yes</span>' : '<span class="muted" style="font-size:12px;">No</span>'}</td>`;
+          }
+          return `<td>${esc(truncate(r[f.key], 80))}</td>`;
+        })
         .join('');
       return `<tr>
         ${cells}
