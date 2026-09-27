@@ -12,6 +12,7 @@ let tablesEnsured = false;
 async function ensureTables(sql) {
   if (tablesEnsured) return;
   tablesEnsured = true;
+  try {
     // Always run safe column additions so newly added columns are applied without manual DB manipulation
     try {
       await sql`ALTER TABLE publications ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT FALSE`;
