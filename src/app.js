@@ -118,10 +118,10 @@ function buildApp() {
     }
   }, 5 * 60 * 1000).unref();
 
-  // â”€â”€ Cache-Control for all GET /api/* responses â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Cache-Control for all GET /api/* responses: Ensure immediate live updates
   app.use('/api', (req, res, next) => {
     if (req.method === 'GET') {
-      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=86400');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     }
     next();
   });
@@ -301,9 +301,7 @@ function buildApp() {
         (byEvent[p.event_id] = byEvent[p.event_id] || []).push({ src: p.src, caption: p.caption });
       }
       
-      // Vercel Edge Caching: Cache for 5 minutes at the edge CDN, serve stale while revalidating.
-      // This drops data pull time from ~800ms down to ~10ms for 99% of visitors!
-      res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=86400');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
       res.json({
         settings: {
